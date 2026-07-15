@@ -37,7 +37,7 @@ public class Nation {
 
     // ── Units & territory ────────────────────────────────────────────────────
     private final ArrayList<Unit> units = new ArrayList<>();
-    /** Hex coordinates that belong to this player's territory */
+    // hex coords that belong to this player's territory
     private final ArrayList<Pair<Integer, Integer>> territory = new ArrayList<>();
 
     // ── Town Hall ─────────────────────────────────────────────────────────────
@@ -71,7 +71,7 @@ public class Nation {
     public Currency getStone() { return stone; }
     public Currency getIron()  { return iron; }
 
-    /** Attempt to spend resources. Returns false (and spends nothing) if any amount is insufficient. */
+    // checks if we can afford this, doesn't spend anything if any amount is short
     public boolean canAfford(int foodCost, int woodCost, int stoneCost, int ironCost) {
         return food.getBalance()  >= foodCost
             && wood.getBalance()  >= woodCost
@@ -95,8 +95,8 @@ public class Nation {
     public boolean canTrainUnit() { return units.size() < getUnitCap(); }
     public void addTownUnitCapBonus() { extraUnitCap += UNIT_CAP_PER_TOWN; }
 
-    /** Sets the player-chosen initial Unit Cap (spec: chosen by the player at game start,
-     *  not a fixed constant). Must be called before any Town bonuses are applied. */
+    // player picks the starting unit cap at game start (not a fixed number), call this
+    // before any town bonuses get applied
     public void setBaseUnitCap(int baseUnitCap) { this.baseUnitCap = baseUnitCap; }
 
     // ── Starvation ────────────────────────────────────────────────────────────
@@ -105,8 +105,8 @@ public class Nation {
     public void setInStarvation(boolean v) { this.inStarvation = v; }
 
     // ── Storage capacity (upgraded via Town Hall) ─────────────────────────────
-    // Doc (Storage Upgrade 1 & 2): capacity increase applies to wood, stone, and iron only -
-    // food is not listed and keeps its base capacity.
+    // storage upgrade 1 & 2 only bump wood/stone/iron capacity, food stays at base
+    // (that's just how the spec lists it)
 
     public void upgradeStorageCapacity(int bonus) {
         wood.setCapacity(wood.getCapacity()   + bonus);

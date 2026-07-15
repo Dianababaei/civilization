@@ -24,7 +24,7 @@ public class Game {
     private int subTurn = 0;
     private ArrayList<User> playersInGame = new ArrayList<>();
 
-    /** Supplies the JPanel for a given screen; wired once by the app entry point. */
+    // gives back the JPanel for a screen, set up once by the app entry point
     public interface SceneFactory {
         JPanel createScreen(Menus menu);
     }
@@ -33,7 +33,7 @@ public class Game {
         return mainWindow;
     }
 
-    /** Wires the top-level window and its CardLayout-based screen container. Called once at startup. */
+    // sets up the main window + CardLayout container, only called once when app starts
     public void initWindow(JFrame mainWindow, CardLayout cardLayout, JPanel screenContainer, SceneFactory sceneFactory) {
         this.mainWindow = mainWindow;
         this.cardLayout = cardLayout;
@@ -89,8 +89,8 @@ public class Game {
         Game.instance.users.add(user);
     }
 
-    /** Swaps the visible screen to the given menu, rebuilding it fresh each time
-     *  (mirrors the old FXML behaviour of reloading the scene root on every switch). */
+    // switches to the given screen, rebuilds it fresh every time (this is basically copying
+    // how the old FXML version reloaded the scene root on every switch)
     public void changeScene(Menus menu) {
         JPanel screen = sceneFactory.createScreen(menu);
         String cardName = menu.name();

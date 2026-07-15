@@ -25,9 +25,9 @@ public class GameController extends Controller {
     public static void setCurrentTurnUser(User u) { currentTurnUser = u; }
 
     // ── Nation selection ──────────────────────────────────────────────────────
-    // Legacy game-start hook: assigns NationType to player. Nation object is
-    // already created; this is a no-op in the new 4-resource model since
-    // NationType is cosmetic only (no bonuses).
+    // old hook from when we picked a NationType at game start. nation object already
+    // exists by now so this basically does nothing anymore (NationType doesn't give bonuses
+    // in the 4-resource version we ended up with)
     public void chooseNation(int nationIndex, int playerIndex) {
         if (playerIndex >= Game.instance.getPlayersInGame().size()) return;
         User player = Game.instance.getPlayersInGame().get(playerIndex);
@@ -48,10 +48,9 @@ public class GameController extends Controller {
     }
 
     // ── Turn readiness ────────────────────────────────────────────────────────
-    // Doc: idle units with remaining AP must trigger a *warning* before ending the
-    // turn, not an outright block - the player can still choose to end turn anyway.
-    // The warning/confirmation itself lives in GamePlayController.nextTurn(); this
-    // method only performs the actual turn advance once the player has confirmed.
+    // if units still have AP left we just warn the player, we don't block ending turn.
+    // the actual warning popup is in GamePlayController.nextTurn(), this here just
+    // checks if we need to show it
 
     public static boolean hasIdleUnits() {
         Nation n = currentTurnUser.getNation();
@@ -71,90 +70,91 @@ public class GameController extends Controller {
         return "next turn: " + Game.instance.getTurn();
     }
 
-    // ── NEXT GAME TURN (Steps 10, 11, 12) ────────────────────────────────────
-    // Order: AP refresh → building production + TownHall queue (same step) →
-    //        upkeep deduct (against post-production balance) → starvation check
-    //        → BorderExpander cleanup → fog-of-war update
+    // ── NEXT GAME TURN (steps 10, 11, 12 from the spec) ──────────────────────
+    // order matters here: AP refresh -> building production + townhall queue (same step)
+    // -> upkeep (uses balance after production) -> starvation check -> border expander
+    // cleanup -> fog of war update
 
     public static void nextGameTurn() {
         Game.instance.setTurn(Game.instance.getTurn() + 1);
+        System.out.println("DEBUG: nextGameTurn() called, turn is now " + Game.instance.getTurn());
 
         for (User user : Game.instance.getPlayersInGame()) {
             Nation nation = user.getNation();
 
-            // ── Step 10a: Refresh AP for all units ───────────────────────────
+            // step 10a: refresh AP for all units
             for (Unit unit : nation.getUnits()) {
                 unit.refreshAp();
             }
 
-            // ── Step 10b: Reset net rates before recalculating ───────────────
+            // step 10b: reset net rates before we recalc them below
             nation.getFood().resetNetRate();
             nation.getWood().resetNetRate();
             nation.getStone().resetNetRate();
             nation.getIron().resetNetRate();
 
-            // ── Step 10c: TownHall safeguard trickle (wood + food) ────────────
+            // step 10c: townhall trickle (small wood+food safeguard so you don't get stuck)
             if (nation.getTownHall() != null) {
                 nation.getTownHall().produceSafeguardTrickle();
             }
 
-            // ── Step 10d: Building production (Workers → resources) ──────────
-            //    Also handle Step 11: upkeep deduction + 3-turn destruction
+            // step 10d: buildings produce resources (workers -> resources)
+            // this also does step 11 (upkeep + 3 turn destroy) inside it
             processBuildings(nation);
 
-            // ── Step 10d (cont'd): TownHall production queue advances alongside
-            //    building production, per spec's turn order (same step, not the last thing).
+            // townhall production queue moves forward here too, same step as building
+            // production (not at the very end like i first had it)
             processTownHallQueue(nation);
 
-            // ── Step 10g: Unit food consumption ───────────────────────────────
-            // every unit eats 1 food per turn
+            // step 10g: each unit eats 1 food per turn
             for (Unit unit : nation.getUnits()) {
                 nation.getFood().add(-1);
                 nation.getFood().addToNetRate(-1);
             }
 
-            // ── Step 10f: Starvation check ────────────────────────────────────
-            // Starvation: net food rate is negative AND food storage is below 0.
+            // step 10f: starving if net food rate is negative AND balance already below 0
             boolean starving = nation.getFood().getNetRate() < 0
                     && nation.getFood().getBalance() < 0;
             nation.setInStarvation(starving);
+            System.out.println("DEBUG turn=" + Game.instance.getTurn() + " nation food balance="
+                    + nation.getFood().getBalance() + " starving=" + starving);
 
-            // ── Population growth (frozen while starving) ─────────────────────
+            // population growth stops while starving
             if (nation.getTownHall() != null) {
                 nation.getTownHall().tickPopulationGrowth(nation.getFood().getNetRate());
             }
 
-            // ── Step 12: BorderExpander consume mechanic ──────────────────────
+            // step 12: border expander gets consumed once it expands the border
             processBorderExpanders(nation);
         }
 
-        // ── Fog-of-war update ─────────────────────────────────────────────────
+        // fog of war update for everyone
         updateFogOfWar();
 
         LandController.updateDistances();
     }
 
-    // ── Step 11: building upkeep + 3-turn destruction ────────────────────────
+    // ── step 11: building upkeep + destroy after 3 missed turns ───────────────
 
     private static void processBuildings(Nation nation) {
-        // Collect all improvements from every tile owned by this nation
+        // go through every tile this nation owns and process its improvement (if any)
         for (Pair<Integer, Integer> hex : nation.getTerritory()) {
             if (!Pair.isValid(hex)) continue;
             Land tile = Game.instance.map[hex.x][hex.y];
             Improvement imp = tile.getImprovement();
             if (imp == null) continue;
-            // Doc: resources on undiscovered hexes can't be used.
+            // can't use resources on tiles we haven't discovered yet
             if (tile.getVisibility() == 0) continue;
 
             ImprovementType type = imp.getImprovementType();
 
-            // Iron Mine draws from the tile's independent iron deposit; every other
-            // extractive building draws from the tile's primary resource (wood/stone/food).
+            // iron mine uses its own separate iron deposit, everything else pulls from
+            // the tile's normal resource (wood/stone/food)
             Resource deposit = (type == ImprovementType.IRON_MINE) ? tile.getIronResource() : tile.getResource();
 
-            // Produce resources from stationed workers, capped by the tile's remaining deposit
+            // produce from stationed workers, capped by how much deposit is left
             int wanted = imp.calcBaseProduction();
-            // TECH_TOOLS: 1.5× multiplier on stone/iron mines
+            // tech_tools gives 1.5x on stone/iron mines
             if (wanted > 0 && type.producedResource != null
                     && (type == ImprovementType.STONE_MINE || type == ImprovementType.IRON_MINE)
                     && nation.hasTechnology(TechnologyType.TECH_TOOLS)) {
@@ -162,15 +162,14 @@ public class GameController extends Controller {
             }
             int produced = imp.extractProduction(wanted, deposit);
             if (produced > 0 && type.producedResource != null) {
-                // Credit production to the balance immediately (not just netRate) so
-                // upkeep below is checked against the up-to-date balance, per spec's
-                // turn order: production must land before upkeep is deducted.
+                // add straight to balance (not just netRate) so upkeep below sees the
+                // updated amount - production has to land before upkeep gets deducted
                 nation.getResource(type.producedResource).add(produced);
                 nation.getResource(type.producedResource).addToNetRate(produced);
             }
-            // Deposit exhausted: the improvement can never produce again, so destroy it
-            // immediately and free the hex (e.g. a depleted Stone Mine no longer blocks
-            // building an Iron Mine on the same mountain tile).
+            // deposit ran out -> building can never produce again so just destroy it and
+            // free up the tile (e.g. depleted stone mine shouldn't block building an iron
+            // mine on the same mountain)
             boolean depleted = deposit != null && deposit.isDepleted();
             if (wanted > 0 && depleted) {
                 for (CivilizedUnit worker : new ArrayList<>(imp.getStationedWorkers())) {
@@ -181,15 +180,15 @@ public class GameController extends Controller {
                 continue;
             }
 
-            // An unstaffed building is dormant, not a liability - only charge upkeep while it
-            // actually has workers stationed. Otherwise a Builder placing improvements ahead of
-            // having enough Workers to staff them silently drains Wood for zero output.
+            // building with no workers isn't costing us anything, only charge upkeep if
+            // it's actually staffed. otherwise builders placing improvements before we have
+            // enough workers would silently drain wood for nothing
             if (imp.getWorkerCount() == 0) {
                 imp.resetMissedUpkeep();
                 continue;
             }
 
-            // Pay upkeep (against the balance already updated with this turn's production above)
+            // pay upkeep against the balance we already updated above
             boolean paid = nation.getResource(type.upkeepResource).spend(type.upkeepAmount);
             if (paid) {
                 nation.getResource(type.upkeepResource).addToNetRate(-type.upkeepAmount);
@@ -197,7 +196,7 @@ public class GameController extends Controller {
             if (!paid) {
                 imp.recordMissedUpkeep();
                 if (imp.shouldBeDestroyed()) {
-                    // Evict all stationed workers before destroying
+                    // kick out the workers before we destroy the building
                     for (CivilizedUnit worker : new ArrayList<>(imp.getStationedWorkers())) {
                         worker.leaveStation();
                     }
@@ -209,8 +208,7 @@ public class GameController extends Controller {
         }
     }
 
-    // ── Step 12: BorderExpander consume mechanic ──────────────────────────────
-    // A BorderExpander that has used its expand ability is removed from the map.
+    // ── step 12: border expander gets removed once it's used its ability ─────
 
     private static void processBorderExpanders(Nation nation) {
         Iterator<Unit> it = nation.getUnits().iterator();
@@ -220,7 +218,7 @@ public class GameController extends Controller {
             CivilizedUnit cu = (CivilizedUnit) unit;
             if (cu.getCivilizedUnitType() != CivilizedUnitType.BORDER_EXPANDER) continue;
             if (cu.hasExpanded()) {
-                // Remove from map tile
+                // remove it from the tile
                 Pair<Integer, Integer> loc = cu.getLocation();
                 if (Pair.isValid(loc)) {
                     Game.instance.map[loc.x][loc.y].setCivilizedUnit(null);
@@ -239,16 +237,16 @@ public class GameController extends Controller {
         CivilizedUnitType trained = townHall.advanceQueue();
         if (trained == null) return;
 
-        // Unit cap hit - don't discard the finished unit (its cost was already paid), hold it
-        // and retry next turn instead.
+        // hit unit cap - don't just throw away the finished unit (already paid for it),
+        // keep it queued and try again next turn
         if (!nation.canTrainUnit()) { townHall.requeueFront(trained); return; }
 
         Land mainLand = townHall.getMainLand();
         if (mainLand == null) { townHall.requeueFront(trained); return; }
 
-        // Prefer the Town Hall tile itself; if a unit is already parked there (very common -
-        // it's the tile players return units to), fall back to any free neighboring tile in
-        // the player's own territory rather than blocking the queue forever.
+        // try the town hall tile first. if something's already parked there (happens a lot
+        // since that's where units get sent back to) look for a free neighboring tile we
+        // own instead of just blocking the queue
         Land spawnTile = null;
         if (mainLand.getCivilizedUnit() == null) {
             spawnTile = mainLand;
@@ -269,28 +267,28 @@ public class GameController extends Controller {
         nation.addUnit(newUnit);
     }
 
-    // ── Fog-of-war update ─────────────────────────────────────────────────────
+    // ── fog of war update ──────────────────────────────────────────────────────
 
     private static void updateFogOfWar() {
-        // Collect all nations that have active players
+        // grab nations for all active players
         ArrayList<sut.civilization.Model.Classes.Nation> activeNations = new ArrayList<>();
         for (User user : Game.instance.getPlayersInGame()) {
             activeNations.add(user.getNation());
         }
 
-        // Reset visible tiles: tiles previously seen by any active nation become shadow (1),
-        // never fully black (0) — Explorer permanent reveal is preserved via seerNations.
+        // tiles that were fully visible drop down to "shadow" (seen before, not fog), never
+        // back to full black - explorer's permanent reveal is tracked via seerNations
         for (int i = 0; i < Consts.MAP_SIZE.amount.x; i++) {
             for (int j = 0; j < Consts.MAP_SIZE.amount.y; j++) {
                 Land tile = Game.instance.map[i][j];
                 if (tile.getVisibility() == 2) {
-                    // Was visible — drop to shadow, not fog
+                    // was fully visible, drop to shadow not fog
                     tile.setVisibility(1);
                 } else if (tile.getVisibility() == 0) {
-                    // Fog tile: check if any active nation has explored it before
+                    // still fog - check if we've explored it before
                     for (sut.civilization.Model.Classes.Nation n : activeNations) {
                         if (tile.getSeerNations().contains(n)) {
-                            tile.setVisibility(1); // permanently shadow once explored
+                            tile.setVisibility(1); // stays shadow forever once explored
                             break;
                         }
                     }
@@ -312,16 +310,13 @@ public class GameController extends Controller {
         }
     }
 
-    /**
-     * BFS reveal helper shared with LandController.updateLandVisibility() so there is
-     * a single source of truth for how vision radius translates into revealed tiles.
-     * {@code isExplorer} marks the discovered hexes as "explored by an Explorer" for this
-     * nation — required by Border Expander, per spec, which only accepts hexes an Explorer
-     * has actually revealed (not just any unit's passing visibility).
-     */
+    // BFS reveal helper, also used by LandController.updateLandVisibility() so both places
+    // agree on how vision radius turns into revealed tiles. isExplorer flags the tiles as
+    // "explored by an Explorer" for this nation - border expander needs hexes an Explorer
+    // actually saw, not just any unit passing by
     static void revealAround(Pair<Integer, Integer> center, int radius,
                                      sut.civilization.Model.Classes.Nation nation, boolean isExplorer) {
-        // BFS out to radius — marks tiles visible and records this nation as an explorer
+        // BFS out to radius, marking tiles visible + remembering this nation saw them
         ArrayList<Pair<Integer, Integer>> visited = new ArrayList<>();
         ArrayList<Pair<Integer, Integer>> frontier = new ArrayList<>();
         frontier.add(center);

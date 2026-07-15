@@ -1,8 +1,7 @@
 package sut.civilization.Controller.GameControllers;
 
-// Old Civ V technology tree is removed.
-// Research is now handled by TownHallController.researchTechnology().
+// old civ V tech tree got removed, research is done in TownHallController.researchTechnology() now
 public class TechnologyController extends GameController {
-    // Kept as stub - was called after map init in old code.
+    // stub, old code called this after map init
     public static void updateNextAvailableTechnologies() { }
 }

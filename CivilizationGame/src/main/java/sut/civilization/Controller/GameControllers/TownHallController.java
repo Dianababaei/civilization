@@ -57,12 +57,11 @@ public class TownHallController {
                   : "Cannot train " + type.name + " right now.";
     }
 
-    // ── BorderExpander: expand territory ─────────────────────────────────────
-    // Called when the player activates a BorderExpander unit.
-    // Adds all 6 neighbours of the expander's tile to the nation's territory,
-    // marks the unit as expanded (it will be removed at the start of next turn).
+    // ── border expander: expand territory ────────────────────────────────────
+    // called when player activates a border expander unit. adds all 6 neighbor tiles
+    // to the nation's territory and marks the unit as expanded (gets removed next turn)
 
-    /** UI pre-check: true if this BorderExpander could successfully expand right now. */
+    // just a check for the UI, true if this expander could actually expand right now
     public static boolean canExpandBorder(CivilizedUnit expander) {
         if (expander == null || expander.getCivilizedUnitType() != sut.civilization.Model.ModulEnums.CivilizedUnitType.BORDER_EXPANDER)
             return false;
@@ -94,8 +93,8 @@ public class TownHallController {
             return "Border Expander has no AP left!";
 
         Pair<Integer, Integer> center = expander.getLocation();
-        // Doc: a hex can only be claimed if an Explorer has already revealed it specifically
-        // (not just any unit's passing visibility).
+        // can only claim a hex if an explorer specifically revealed it, not just any unit
+        // walking past
         if (!Game.instance.map[center.x][center.y].isExploredBy(nation))
             return "This hex hasn't been explored by an Explorer yet!";
         for (Pair<Integer, Integer> neighbor : LandController.getAllNeighborsIndexes(center)) {
@@ -114,7 +113,7 @@ public class TownHallController {
         return "Border expanded! Expander will be removed next turn.";
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
+    // ── helpers ───────────────────────────────────────────────────────────────
 
     private static TechnologyType findTech(String name) {
         for (TechnologyType t : TechnologyType.values())

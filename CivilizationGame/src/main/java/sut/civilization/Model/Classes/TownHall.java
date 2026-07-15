@@ -18,11 +18,11 @@ public class TownHall {
     private Land mainLand;
     private int level = 1;
 
-    // City population: grows from banked food surplus, frozen during starvation.
+    // population grows from banked food surplus, freezes while starving
     private int population = 1;
     private int growthProgress = 0;
 
-    // Production queue - each entry is a unit type to train
+    // production queue, each entry is a unit type waiting to be trained
     private final Deque<CivilizedUnitType> productionQueue = new ArrayDeque<>();
     private int turnsLeftForCurrent = 0;
 

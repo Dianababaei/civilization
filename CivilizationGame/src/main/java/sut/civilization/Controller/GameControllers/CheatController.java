@@ -16,7 +16,7 @@ public class CheatController extends GameController {
         Land tile = Game.instance.map[coord.x][coord.y];
         if (tile.getCivilizedUnit() != null) return "A unit is already on this tile!";
 
-        // Default: spawn an Explorer
+        // defaults to spawning an explorer
         CivilizedUnit unit = new CivilizedUnit(
                 CivilizedUnitType.EXPLORER,
                 currentTurnUser.getNation(), coord);

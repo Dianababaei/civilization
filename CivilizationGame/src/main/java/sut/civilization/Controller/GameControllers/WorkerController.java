@@ -5,14 +5,13 @@ import sut.civilization.Model.ModulEnums.*;
 
 public class WorkerController extends GameController {
 
-    /** AP a Worker spends to station in an improvement; NOT refunded on leaving (see CivilizedUnit.leaveStation()). */
+    // AP cost for a worker to station in an improvement, doesn't get refunded when they leave
+    // (see CivilizedUnit.leaveStation())
     public static final int STATION_AP_COST = CivilizedUnit.STATION_AP_COST;
 
-    /**
-     * Read-only eligibility check shared by the actual build action and the UI (to grey out
-     * options the player can't currently use). Returns null if building {@code type} would
-     * succeed right now for the selected Builder, or a reason string if it would not.
-     */
+    // just checks if building would work, doesn't actually build anything. used both by the
+    // real build action and by the UI to grey out buttons the player can't use right now.
+    // returns null if it'd succeed, otherwise a message explaining why not
     public static String checkCanBuild(ImprovementType type) {
         if (selectedCivilizedUnit == null)
             return "Select a Builder first!";
@@ -23,11 +22,11 @@ public class WorkerController extends GameController {
 
         Land tile = Game.instance.map[selectedCivilizedUnit.getLocation().x][selectedCivilizedUnit.getLocation().y];
 
-        // Doc: resources on undiscovered hexes can't be used (visibility 0 = fog of war).
+        // can't use resources on hexes we haven't discovered (visibility 0 = fog)
         if (tile.getVisibility() == 0)
             return "This hex hasn't been explored yet!";
 
-        // Doc: every structure must be built on a hex inside the player's own territory.
+        // buildings have to go inside our own territory
         Nation nation = currentTurnUser.getNation();
         if (!nation.ownsHex(tile.getI(), tile.getJ()))
             return "This hex is outside your territory!";
@@ -35,7 +34,7 @@ public class WorkerController extends GameController {
         if (tile.getImprovement() != null)
             return "There is already an improvement here!";
 
-        // Tech checks
+        // tech checks
         if (type.requiresStoneTech && !nation.hasTechnology(TechnologyType.TECH_STONE_MINE))
             return "Requires Stone Mine technology!";
         if (type.requiresIronTech && !nation.hasTechnology(TechnologyType.TECH_IRON_MINE))
@@ -43,36 +42,35 @@ public class WorkerController extends GameController {
         if (type.requiresTownTech && !nation.hasTechnology(TechnologyType.TECH_TOWN))
             return "Requires Town Construction technology!";
 
-        // Land type check
+        // terrain check
         if (type.requiredLandType != null && tile.getLandType() != type.requiredLandType)
             return "This improvement requires " + type.requiredLandType.name + " terrain!";
 
-        // Resource check for tile resource requirement
+        // does the tile have the resource this improvement needs
         if (type.requiredTileResource != null &&
                 (tile.getResource() == null || tile.getResource().getResourceType() != type.requiredTileResource))
             return "This tile lacks the required resource for " + type.name + "!";
 
-        // Lumber Mill needs wood (every forest tile has it, but a prior mill may have exhausted it)
+        // lumber mill needs wood - every forest has it but an earlier mill might've used it up
         if (type == ImprovementType.LUMBER_MILL && tile.isResourceDepleted())
             return "This tile's wood deposit is depleted!";
         if (type.requiredTileResource != null && tile.isResourceDepleted())
             return "This tile's " + type.requiredTileResource.name + " deposit is depleted!";
 
-        // Farm needs wheat/rice (FOOD resource) on meadow; Stable needs livestock (FOOD resource) on plain
+        // farm needs wheat/rice (food) on meadow, stable needs livestock (food) on plain
         if ((type == ImprovementType.FARM || type == ImprovementType.STABLE) && !tile.hasFoodResource())
             return type.name + " requires a tile with food resources (wheat/rice or livestock)!";
         if ((type == ImprovementType.FARM || type == ImprovementType.STABLE) && tile.isResourceDepleted())
             return "This tile's food deposit is depleted!";
 
-        // Iron Mine needs a mountain tile that also carries iron ore (independent of guaranteed stone)
+        // iron mine needs a mountain tile that also happens to have iron ore
         if (type == ImprovementType.IRON_MINE && !tile.hasIron())
             return type.name + " requires a mountain tile with iron ore!";
         if (type == ImprovementType.IRON_MINE && tile.isIronDepleted())
             return "This tile's iron deposit is depleted!";
 
-        // Town must sit on a genuinely resource-free hex. Every MOUNTAIN tile always carries a
-        // guaranteed stone deposit (see mapInitializer), so mountains never qualify - only a
-        // MEADOW/PLAIN with no wheat/rice/livestock resource on it does.
+        // town needs a hex with literally no resource on it. mountains always have stone
+        // (see mapInitializer) so they never count - only meadow/plain with nothing on it works
         if (type == ImprovementType.TOWN) {
             boolean resourceFree = (tile.getLandType() == LandType.MEADOW || tile.getLandType() == LandType.PLAIN)
                     && tile.getResource() == null;
@@ -80,17 +78,15 @@ public class WorkerController extends GameController {
                 return "Town can only be built on a hex with no resource (empty meadow or plain)!";
         }
 
-        // Afford build cost
+        // can we actually afford it
         if (!nation.canAfford(0, type.buildCostWood, type.buildCostStone, type.buildCostIron))
             return "Not enough resources to build " + type.name + "!";
 
         return null;
     }
 
-    /**
-     * Builder places an improvement on the current tile, spending one charge.
-     * Returns a result message. If the builder runs out of charges it is removed.
-     */
+    // builder places an improvement on its current tile, uses up one charge.
+    // if it's out of charges after this it gets removed
     public static String builderBuildImprovement(String name) {
         ImprovementType type = null;
         for (ImprovementType t : ImprovementType.values())
@@ -110,6 +106,7 @@ public class WorkerController extends GameController {
         if (type == ImprovementType.TOWN) nation.addTownUnitCapBonus();
         selectedCivilizedUnit.spendAp(type.buildApCost);
 
+        System.out.println("DEBUG: built " + type.name + " at (" + tile.getI() + "," + tile.getJ() + ")");
         boolean consumed = selectedCivilizedUnit.useCharge();
         if (consumed) {
             tile.setCivilizedUnit(null);
@@ -120,12 +117,8 @@ public class WorkerController extends GameController {
         return type.name + " built! Builder has " + selectedCivilizedUnit.getCharges() + " charge(s) remaining.";
     }
 
-    /**
-     * Read-only eligibility check for stationing the selected Worker, shared by the actual
-     * station action and the UI (to preventively grey out the Station button rather than
-     * showing an error after the click). Returns null if stationing would succeed right now,
-     * or a reason string if it would not.
-     */
+    // check if stationing the selected worker would work, without actually doing it.
+    // used by the UI too so it can grey out the station button instead of erroring after click
     public static String checkCanStation() {
         if (selectedCivilizedUnit == null)
             return "Select a Worker first!";
@@ -146,9 +139,7 @@ public class WorkerController extends GameController {
         return null;
     }
 
-    /**
-     * Station a Worker inside the improvement on their current tile.
-     */
+    // stations a worker in the improvement on its current tile
     public static String stationWorker() {
         if (selectedCivilizedUnit == null)
             return "Select a Worker first!";
@@ -172,9 +163,7 @@ public class WorkerController extends GameController {
         return "Worker stationed in " + improvement.getImprovementType().name + ".";
     }
 
-    /**
-     * Remove a stationed Worker from their current improvement.
-     */
+    // removes a stationed worker from whatever improvement they're in
     public static String unstationWorker() {
         if (selectedCivilizedUnit == null)
             return "Select a Worker first!";
@@ -187,9 +176,7 @@ public class WorkerController extends GameController {
         return "Worker removed from " + improvement.getImprovementType().name + ".";
     }
 
-    /**
-     * Repair a broken improvement (kept for backward compat with UnitStatus system).
-     */
+    // repairs a broken improvement (kept around for backward compat with UnitStatus)
     public static String setWorkerToRepair() {
         Land tile = Game.instance.map[selectedCivilizedUnit.getLocation().x][selectedCivilizedUnit.getLocation().y];
         if (tile.getImprovement() == null)
@@ -206,12 +193,12 @@ public class WorkerController extends GameController {
             tile.getImprovement().setBroken(false);
     }
 
-    // Land features removed from new model - stub kept for backward compat.
+    // land features aren't a thing in the new model anymore, just kept this stub around
     public static String setWorkerToRemoveFeature() {
         return "Land features are not part of the current game.";
     }
 
-    // Road/route concepts removed from new model - stub kept for backward compat.
+    // same deal, roads got cut from the new model
     public static String setWorkerToRemoveRoute() {
         return "Routes are not part of the current game.";
     }

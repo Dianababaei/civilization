@@ -18,11 +18,9 @@ public class UnitController extends GameController {
     // which tile was occupied and blocked us, so we can show it in the popup message
     public static Pair<Integer, Integer> lastBlockedHex = null;
 
-    /**
-     * Validates and queues a path for the selected unit; does NOT move it.
-     * The caller (GamePlayController) animates the walk hex-by-hex via unitGoForward(),
-     * since the doc requires visible step-by-step movement, not an instant teleport.
-     */
+    // checks the path and queues it up, doesn't actually move the unit.
+    // GamePlayController animates it hex by hex with unitGoForward() since we need
+    // visible step-by-step movement, not just teleporting to destination
     public static String unitSetPath(int x, int y, int selection) {
         Unit selectedUnit = selectedCivilizedUnit;
         if (selectedUnit != null && selectedUnit.getUnitStatus() == UnitStatus.WORKING)
@@ -84,6 +82,7 @@ public class UnitController extends GameController {
             Game.instance.map[next.x][next.y].setCivilizedUnit((CivilizedUnit) unit);
         }
         unit.setLocation(next);
+        System.out.println("DEBUG: unit moved to (" + next.x + "," + next.y + ") mp left=" + unit.getMP());
 
         if (Game.instance.map[next.x][next.y].getRuin() != null) {
             unitRetrieveRuin(unit);

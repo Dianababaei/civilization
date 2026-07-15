@@ -5,8 +5,8 @@ import sut.civilization.Model.Classes.*;
 
 import static sut.civilization.Model.Classes.Pair.isValid;
 
-// City/settler concepts are removed. TownHall is placed by the Builder unit.
-// isCityBuildable is kept as isTownHallBuildable for Builder placement validation.
+// city/settler stuff got removed, town hall gets placed by the builder unit now.
+// kept isCityBuildable around renamed to isTownHallBuildable for the placement check
 public class CityController extends GameController {
 
     public static boolean isTownHallBuildable(Pair<Integer, Integer> main) {
@@ -36,7 +36,7 @@ public class CityController extends GameController {
         return true;
     }
 
-    // Called by GameController.nextGameTurn() - now a no-op since affordable
-    // land tracking was a City concept. Kept as stub so call sites compile.
+    // called from GameController.nextGameTurn() but doesn't do anything now, affordable
+    // land tracking was a city thing that got removed. just kept as a stub so it still compiles
     public static void updateAffordableLands() { }
 }

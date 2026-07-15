@@ -21,7 +21,7 @@ public class LandController extends Controller {
     public static void updateLandVisibility() {
         Nation currentNation = GameController.getCurrentTurnUser().getNation();
 
-        // Reset: fog by default; restore shadow for tiles this nation has already explored
+        // reset everything to fog first, then bring back shadow for tiles we've already seen
         for (int i = 0; i < Consts.MAP_SIZE.amount.x; i++) {
             for (int j = 0; j < Consts.MAP_SIZE.amount.y; j++) {
                 Land tile = Game.instance.map[i][j];
@@ -29,9 +29,8 @@ public class LandController extends Controller {
             }
         }
 
-        // Reveal tiles within each unit's vision radius.
-        // Delegates to GameController.revealAround so there is one BFS implementation
-        // shared between the per-turn fog update and this per-render UI refresh.
+        // reveal tiles in range of each unit's vision. calls GameController.revealAround so
+        // we don't duplicate the BFS logic between here (UI refresh) and the per-turn update
         for (int i = 0; i < Consts.MAP_SIZE.amount.x; i++) {
             for (int j = 0; j < Consts.MAP_SIZE.amount.y; j++) {
                 Land tile = Game.instance.map[i][j];
@@ -48,8 +47,8 @@ public class LandController extends Controller {
                 }
             }
         }
-        // Also reveal from TownHall (counts as "explored" for Border Expander purposes,
-        // since this is the player's known starting area, not a transient unit passing by)
+        // also reveal around the town hall itself (counts as explored for border expander,
+        // since it's the player's home base not just some unit passing through)
         if (currentNation.getTownHall() != null) {
             Land thLand = currentNation.getTownHall().getMainLand();
             if (thLand != null) {
@@ -146,9 +145,8 @@ public class LandController extends Controller {
             }
         }
 
-        // Assign tile resources per spec: every FOREST hex has wood, every MOUNTAIN hex has
-        // stone (with iron as an independent rarer subset), and only some MEADOW/PLAIN hexes
-        // have a food deposit (wheat/rice or livestock).
+        // give tiles their resources: forest always has wood, mountain always has stone
+        // (iron is a separate rarer thing on top), meadow/plain only sometimes get food
         for (int i = 0; i < Consts.MAP_SIZE.amount.x; i++) {
             for (int j = 0; j < Consts.MAP_SIZE.amount.y; j++) {
                 LandType lt = map[i][j].getLandType();
@@ -158,8 +156,8 @@ public class LandController extends Controller {
                     map[i][j].setResource(new Resource(ResourceType.STONE));
                     boolean hasIron = random.nextInt(3) == 0;
                     map[i][j].setHasIron(hasIron);
-                    // Iron is an independent depletable deposit from the guaranteed stone,
-                    // so mining out the stone doesn't affect the iron and vice versa.
+                    // iron is tracked as its own separate deposit from stone, so mining out
+                    // the stone doesn't touch iron and vice versa
                     if (hasIron) map[i][j].setIronResource(new Resource(ResourceType.IRON));
                 } else if ((lt == LandType.MEADOW || lt == LandType.PLAIN) && random.nextInt(3) == 0) {
                     map[i][j].setResource(new Resource(ResourceType.FOOD));
@@ -167,32 +165,30 @@ public class LandController extends Controller {
             }
         }
 
-        // Spawn starting units for player 0 (single-player).
-        // Doc: 1 Explorer + 2 Builders + 2 Workers at game start.
+        // spawn starting units for player 0 (this is single-player only for now)
+        // start is 1 explorer + 2 builders + 2 workers
         Nation player0Nation = Game.instance.getPlayersInGame().get(0).getNation();
 
-        // Place TownHall near the center of the 15×15 map
+        // town hall goes near the middle of the 15x15 map
         Land townHallLand = map[7][7];
         TownHall townHall = new TownHall(player0Nation, townHallLand);
         player0Nation.setTownHall(townHall);
-        // Mark TownHall tile and its neighbors as player territory
+        // town hall tile + its neighbors count as player territory
         Pair<Integer, Integer> thCoord = new Pair<>(7, 7);
         player0Nation.addToTerritory(thCoord);
         for (Pair<Integer, Integer> neighbor : getAllNeighborsIndexes(thCoord)) {
             if (Pair.isValid(neighbor)) player0Nation.addToTerritory(neighbor);
         }
 
-        // Guarantee a viable start: the random terrain roll can leave the starting 7 hexes
-        // with no MEADOW/PLAIN tile carrying a food deposit, which makes Farm and Stable
-        // (the only early FOOD buildings) impossible to build near the capital. Force one
-        // neighbor into each, without touching the TownHall tile itself.
+        // random terrain can roll a starting area with zero food tiles, which would make
+        // farm/stable impossible to build near the capital. force at least one neighbor
+        // into each type (without touching the town hall tile itself)
         ensureStartingFoodTiles(map, thCoord);
-        // Same guarantee for Lumber Mill: force at least one neighbor to be FOREST if none
-        // rolled naturally, so wood production isn't blocked at game start either.
+        // same deal for lumber mill - make sure at least one neighbor is forest
         ensureStartingForestTile(map, thCoord);
-        // Make TownHall tile and its immediate neighbors visible at start (per spec).
-        // Also counts as "explored" for Border Expander purposes (it's the player's known
-        // starting territory, not something a passing Builder/Worker happened to see).
+        // town hall + neighbors are visible right from the start.
+        // also counts as "explored" for border expander (it's the player's known starting
+        // area, not something a unit happened to walk past)
         map[thCoord.x][thCoord.y].setVisibility(2);
         map[thCoord.x][thCoord.y].addSeerNation(player0Nation);
         map[thCoord.x][thCoord.y].addExplorerSeenNation(player0Nation);
@@ -204,7 +200,7 @@ public class LandController extends Controller {
             }
         }
 
-        // Units on tiles adjacent to TownHall (avoid TownHall tile itself)
+        // put starting units on tiles next to town hall (not on the town hall tile itself)
         int[][] startSlots = { {6,6}, {6,7}, {7,6}, {7,8}, {8,7} };
         CivilizedUnitType[] startTypes = {
             CivilizedUnitType.EXPLORER,
@@ -215,7 +211,7 @@ public class LandController extends Controller {
         };
         for (int s = 0; s < startTypes.length; s++) {
             Pair<Integer, Integer> loc = new Pair<>(startSlots[s][0], startSlots[s][1]);
-            // Avoid overlapping with existing civilized unit or out-of-bounds
+            // skip if out of bounds or something's already there
             if (!Pair.isValid(loc) || map[loc.x][loc.y].getCivilizedUnit() != null) continue;
             CivilizedUnit unit = new CivilizedUnit(startTypes[s], player0Nation, loc);
             map[loc.x][loc.y].setCivilizedUnit(unit);
@@ -234,16 +230,15 @@ public class LandController extends Controller {
         return map;
     }
 
-    /** Ensures the TownHall's neighbor ring has at least one Farm-eligible tile (MEADOW+FOOD)
-     *  and one Stable-eligible tile (PLAIN+FOOD), converting up to two neighbors (never the
-     *  TownHall tile itself, and never the same tile twice) if the random roll didn't provide
-     *  them. Without this, a starting territory can roll with no food-buildable tile at all. */
+    // makes sure the town hall's neighbor ring has at least one farm tile (meadow+food) and
+    // one stable tile (plain+food). converts up to two neighbors if the random roll didn't
+    // give us any (never touches the town hall tile itself). without this you could start
+    // with literally no food tile nearby
     private static void ensureStartingFoodTiles(Land[][] map, Pair<Integer, Integer> thCoord) {
         ArrayList<Pair<Integer, Integer>> neighbors = getAllNeighborsIndexes(thCoord);
-        // Tiles that must not be touched by the fallback conversion below: either already
-        // artificially converted this call, or already naturally satisfying MEADOW+FOOD/
-        // PLAIN+FOOD on their own (stealing one of those to satisfy the other requirement
-        // would just relocate the shortage instead of fixing it).
+        // tiles we shouldn't touch in the fallback below - either we already converted them
+        // this call, or they already naturally satisfy meadow+food/plain+food (don't want to
+        // steal one to fix the other, that just moves the shortage around)
         ArrayList<Pair<Integer, Integer>> reserved = new ArrayList<>();
         for (Pair<Integer, Integer> nb : neighbors) {
             if (!Pair.isValid(nb)) continue;
@@ -280,22 +275,19 @@ public class LandController extends Controller {
         }
     }
 
-    /**
-     * Guarantees at least one FOREST neighbor of the TownHall so Lumber Mill (the only early
-     * WOOD building) is always buildable at start. Must run after ensureStartingFoodTiles so
-     * it can see which tiles that pass already claimed for MEADOW/PLAIN+food and avoid
-     * reverting them.
-     */
+    // makes sure at least one town hall neighbor is forest, so lumber mill is buildable at
+    // start too. needs to run after ensureStartingFoodTiles so it doesn't steal back a tile
+    // that call already claimed for food
     private static void ensureStartingForestTile(Land[][] map, Pair<Integer, Integer> thCoord) {
         ArrayList<Pair<Integer, Integer>> neighbors = getAllNeighborsIndexes(thCoord);
 
         for (Pair<Integer, Integer> nb : neighbors) {
             if (!Pair.isValid(nb)) continue;
-            if (map[nb.x][nb.y].getLandType() == LandType.FOREST) return; // already satisfied
+            if (map[nb.x][nb.y].getLandType() == LandType.FOREST) return; // already have one
         }
 
-        // Prefer a neighbor that isn't carrying a food resource on MEADOW/PLAIN (those are the
-        // tiles ensureStartingFoodTiles relies on) and isn't a MOUNTAIN (guaranteed stone).
+        // prefer a neighbor without a food resource (those belong to ensureStartingFoodTiles)
+        // and not a mountain (guaranteed stone)
         Pair<Integer, Integer> chosen = null;
         for (Pair<Integer, Integer> nb : neighbors) {
             if (!Pair.isValid(nb)) continue;
@@ -313,7 +305,7 @@ public class LandController extends Controller {
 
         Land land = map[chosen.x][chosen.y];
         land.setLandType(LandType.FOREST);
-        land.setResource(new Resource(ResourceType.WOOD)); // every FOREST hex carries wood (see mapInitializer)
+        land.setResource(new Resource(ResourceType.WOOD)); // forest tiles always have wood
     }
 
     public static Land getLandByCoordinates(int x, int y) {
