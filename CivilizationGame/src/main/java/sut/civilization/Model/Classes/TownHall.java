@@ -83,6 +83,12 @@ public class TownHall {
         return null;
     }
 
+    /** Puts a just-finished unit back at the front of the queue (spawn tile was occupied). */
+    public void requeueFront(CivilizedUnitType type) {
+        productionQueue.addFirst(type);
+        turnsLeftForCurrent = 0; // already fully trained - try to spawn again next turn
+    }
+
     public boolean hasQueuedProduction() { return !productionQueue.isEmpty(); }
     public CivilizedUnitType getCurrentProduction() { return productionQueue.peekFirst(); }
     public int getTurnsLeftForCurrent() { return turnsLeftForCurrent; }

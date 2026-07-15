@@ -1,6 +1,6 @@
 # Civilization V — Useful Commands
 
-Run these from `Civilization-V-main/CivilizationGame` (the folder with `pom.xml`).
+Run these from `CivilizationGame` (the folder with `pom.xml`).
 
 ## Build + Run (do this every time after editing code)
 ```bash

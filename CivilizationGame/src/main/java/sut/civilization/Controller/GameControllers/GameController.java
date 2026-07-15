@@ -233,10 +233,29 @@ public class GameController extends Controller {
         CivilizedUnitType trained = townHall.advanceQueue();
         if (trained == null) return;
 
-        if (!nation.canTrainUnit()) return; // unit cap hit - skip spawn
+        // Unit cap hit - don't discard the finished unit (its cost was already paid), hold it
+        // and retry next turn instead.
+        if (!nation.canTrainUnit()) { townHall.requeueFront(trained); return; }
 
-        Land spawnTile = townHall.getMainLand();
-        if (spawnTile == null || spawnTile.getCivilizedUnit() != null) return;
+        Land mainLand = townHall.getMainLand();
+        if (mainLand == null) { townHall.requeueFront(trained); return; }
+
+        // Prefer the Town Hall tile itself; if a unit is already parked there (very common -
+        // it's the tile players return units to), fall back to any free neighboring tile in
+        // the player's own territory rather than blocking the queue forever.
+        Land spawnTile = null;
+        if (mainLand.getCivilizedUnit() == null) {
+            spawnTile = mainLand;
+        } else {
+            Pair<Integer, Integer> thCoord = new Pair<>(mainLand.getI(), mainLand.getJ());
+            for (Pair<Integer, Integer> nb : LandController.getAllNeighborsIndexes(thCoord)) {
+                if (!Pair.isValid(nb)) continue;
+                if (!nation.ownsHex(nb.x, nb.y)) continue;
+                Land candidate = Game.instance.map[nb.x][nb.y];
+                if (candidate.getCivilizedUnit() == null) { spawnTile = candidate; break; }
+            }
+        }
+        if (spawnTile == null) { townHall.requeueFront(trained); return; }
 
         CivilizedUnit newUnit = new CivilizedUnit(trained, nation,
                 new Pair<>(spawnTile.getI(), spawnTile.getJ()));
