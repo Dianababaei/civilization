@@ -187,6 +187,9 @@ public class LandController extends Controller {
         // (the only early FOOD buildings) impossible to build near the capital. Force one
         // neighbor into each, without touching the TownHall tile itself.
         ensureStartingFoodTiles(map, thCoord);
+        // Same guarantee for Lumber Mill: force at least one neighbor to be FOREST if none
+        // rolled naturally, so wood production isn't blocked at game start either.
+        ensureStartingForestTile(map, thCoord);
         // Make TownHall tile and its immediate neighbors visible at start (per spec).
         // Also counts as "explored" for Border Expander purposes (it's the player's known
         // starting territory, not something a passing Builder/Worker happened to see).
@@ -275,6 +278,42 @@ public class LandController extends Controller {
             land.setLandType(targetType);
             land.setResource(new Resource(ResourceType.FOOD));
         }
+    }
+
+    /**
+     * Guarantees at least one FOREST neighbor of the TownHall so Lumber Mill (the only early
+     * WOOD building) is always buildable at start. Must run after ensureStartingFoodTiles so
+     * it can see which tiles that pass already claimed for MEADOW/PLAIN+food and avoid
+     * reverting them.
+     */
+    private static void ensureStartingForestTile(Land[][] map, Pair<Integer, Integer> thCoord) {
+        ArrayList<Pair<Integer, Integer>> neighbors = getAllNeighborsIndexes(thCoord);
+
+        for (Pair<Integer, Integer> nb : neighbors) {
+            if (!Pair.isValid(nb)) continue;
+            if (map[nb.x][nb.y].getLandType() == LandType.FOREST) return; // already satisfied
+        }
+
+        // Prefer a neighbor that isn't carrying a food resource on MEADOW/PLAIN (those are the
+        // tiles ensureStartingFoodTiles relies on) and isn't a MOUNTAIN (guaranteed stone).
+        Pair<Integer, Integer> chosen = null;
+        for (Pair<Integer, Integer> nb : neighbors) {
+            if (!Pair.isValid(nb)) continue;
+            Land land = map[nb.x][nb.y];
+            boolean isFoodTile = (land.getLandType() == LandType.MEADOW || land.getLandType() == LandType.PLAIN)
+                    && land.hasFoodResource();
+            if (!isFoodTile && land.getLandType() != LandType.MOUNTAIN) { chosen = nb; break; }
+        }
+        if (chosen == null) {
+            for (Pair<Integer, Integer> nb : neighbors) {
+                if (Pair.isValid(nb) && map[nb.x][nb.y].getLandType() != LandType.MOUNTAIN) { chosen = nb; break; }
+            }
+        }
+        if (chosen == null) return;
+
+        Land land = map[chosen.x][chosen.y];
+        land.setLandType(LandType.FOREST);
+        land.setResource(new Resource(ResourceType.WOOD)); // every FOREST hex carries wood (see mapInitializer)
     }
 
     public static Land getLandByCoordinates(int x, int y) {
