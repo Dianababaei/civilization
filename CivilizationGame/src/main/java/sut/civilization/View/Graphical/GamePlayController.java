@@ -617,6 +617,10 @@ public class GamePlayController extends ViewController {
                             : WorkerController.stationWorker();
                     showPopUp(SwingUtilities.getWindowAncestor(root), message);
                     updateHud();
+                    // need to manually repaint the tile here since stationing doesn't move
+                    // the unit - otherwise the green "stationed" dot doesn't show up until
+                    // something else forces the map to redraw
+                    if (wu != null) graphicalMap[wu.getLocation().x][wu.getLocation().y].updateMap();
                     if (wu != null && GameController.getSelectedCivilizedUnit() == wu) showSelectedCivilizedUnitInfo();
                 });
                 break;
@@ -814,10 +818,13 @@ public class GamePlayController extends ViewController {
         stoneInfo.setText(resourceText(nation.getStone()));
         ironInfo.setText(resourceText(nation.getIron()));
 
-        foodInfo.setForeground(nation.getFood().getNetRate() < 0 ? Color.RED : new Color(0x7ecf5a));
-        woodInfo.setForeground(nation.getWood().getNetRate() < 0 ? Color.RED : new Color(0xc8883a));
-        stoneInfo.setForeground(nation.getStone().getNetRate() < 0 ? Color.RED : new Color(0xb0b0b0));
-        ironInfo.setForeground(nation.getIron().getNetRate() < 0 ? Color.RED : new Color(0x6bafd6));
+        // show red if either the balance is negative or we're losing this resource
+        // this turn - before we only checked the rate so a negative balance with a
+        // 0 rate looked green which was confusing
+        foodInfo.setForeground(nation.getFood().getBalance() < 0 || nation.getFood().getNetRate() < 0 ? Color.RED : new Color(0x7ecf5a));
+        woodInfo.setForeground(nation.getWood().getBalance() < 0 || nation.getWood().getNetRate() < 0 ? Color.RED : new Color(0xc8883a));
+        stoneInfo.setForeground(nation.getStone().getBalance() < 0 || nation.getStone().getNetRate() < 0 ? Color.RED : new Color(0xb0b0b0));
+        ironInfo.setForeground(nation.getIron().getBalance() < 0 || nation.getIron().getNetRate() < 0 ? Color.RED : new Color(0x6bafd6));
 
         unitCapInfo.setText(nation.getUnitCount() + "/" + nation.getUnitCap());
         unitCapInfo.setToolTipText(unitBreakdownText(nation));
@@ -826,12 +833,20 @@ public class GamePlayController extends ViewController {
         starvationLabel.setVisible(starving);
 
         int atRiskBuildings = 0;
+        StringBuilder atRiskDetail = new StringBuilder("<html>");
         for (Pair<Integer, Integer> hex : nation.getTerritory()) {
             if (!Pair.isValid(hex)) continue;
             Improvement imp = Game.instance.map[hex.x][hex.y].getImprovement();
-            if (imp != null && imp.getMissedUpkeepTurns() >= 2) atRiskBuildings++;
+            if (imp != null && imp.getMissedUpkeepTurns() >= 2) {
+                atRiskBuildings++;
+                atRiskDetail.append(imp.getImprovementType().name).append(" at (").append(hex.x).append(",").append(hex.y)
+                        .append(") - missed ").append(imp.getMissedUpkeepTurns()).append("/3 Wood upkeep payments<br>");
+            }
         }
-        buildingWarningLabel.setText(atRiskBuildings + " building(s) will be destroyed next turn (unpaid upkeep)!");
+        atRiskDetail.append("A building is destroyed (its workers evicted) once it misses 3 upkeep payments in a row. "
+                + "Each building needs 1 Wood/turn while staffed - station fewer Workers or grow your Wood income to save it.</html>");
+        buildingWarningLabel.setText(atRiskBuildings + " building(s) will be destroyed next turn (unpaid Wood upkeep) - hover for details");
+        buildingWarningLabel.setToolTipText(atRiskBuildings > 0 ? atRiskDetail.toString() : null);
         buildingWarningLabel.setVisible(atRiskBuildings > 0);
 
         turn.setText("Turn " + Game.instance.getTurn());
@@ -952,9 +967,13 @@ public class GamePlayController extends ViewController {
         JPanel marker = new JPanel();
         marker.setBackground(new Color(0xffe066));
         marker.setBorder(BorderFactory.createLineBorder(new Color(0x7a5c00), 2));
-        int size = 36;
+        // tile positions are stored unscaled and multiplied by the current zoom level
+        // when drawn (see LandGraphical.applyBounds) - the marker has to do the same
+        // scaling or it ends up in the wrong spot on screen whenever zoom != 1.0
+        double zoom = ZOOM_LEVELS[zoomIndex];
+        int size = (int) (36 * zoom);
         Pair<Double, Double> startCenter = graphicalMap[unit.getLocation().x][unit.getLocation().y].getCenterCoordinate();
-        marker.setBounds((int) (startCenter.x - size / 2.0), (int) (startCenter.y - size / 2.0), size, size);
+        marker.setBounds((int) (startCenter.x * zoom - size / 2.0), (int) (startCenter.y * zoom - size / 2.0), size, size);
         mapPane.add(marker);
         mapPane.setComponentZOrder(marker, 0);
         movementMarker = marker;
@@ -989,6 +1008,31 @@ public class GamePlayController extends ViewController {
             showPopUp(SwingUtilities.getWindowAncestor(root), "Ruin retrieved.");
         }
 
+        if (UnitController.lastStepBlocked) {
+            UnitController.lastStepBlocked = false;
+            Pair<Integer, Integer> blockedHex = UnitController.lastBlockedHex;
+            UnitController.lastBlockedHex = null;
+            mapPane.remove(marker);
+            mapPane.repaint();
+            updateWholeMap();
+            unitMovement.setText("AP: " + unit.getCurrentAp() + "/" + unit.getMaxAp());
+            String blockerName = "another unit";
+            if (blockedHex != null) {
+                CivilizedUnit blocker = Game.instance.map[blockedHex.x][blockedHex.y].getCivilizedUnit();
+                if (blocker != null) blockerName = blocker.getCivilizedUnitType().name;
+            }
+            String stoppedAt = "(" + unit.getLocation().x + "," + unit.getLocation().y + ")";
+            String blockedAt = blockedHex == null ? "" : " at (" + blockedHex.x + "," + blockedHex.y + ")";
+            showPopUp(SwingUtilities.getWindowAncestor(root),
+                    "Stopped at " + stoppedAt + ": the next tile" + blockedAt + " is occupied by a " + blockerName
+                            + ". The unit did not disappear - select it again and re-issue Move once the tile is clear.");
+            if (activePopup != null && GameController.getSelectedCivilizedUnit() == unit) {
+                showSelectedCivilizedUnitInfo();
+            }
+            return;
+        }
+
+        double zoom = ZOOM_LEVELS[zoomIndex];
         Pair<Double, Double> fromCenter = graphicalMap[from.x][from.y].getCenterCoordinate();
         Pair<Double, Double> toCenter = graphicalMap[to.x][to.y].getCenterCoordinate();
 
@@ -999,8 +1043,8 @@ public class GamePlayController extends ViewController {
         timer.addActionListener(e -> {
             tick[0]++;
             double t = tick[0] / (double) steps;
-            double x = fromCenter.x + (toCenter.x - fromCenter.x) * t;
-            double y = fromCenter.y + (toCenter.y - fromCenter.y) * t;
+            double x = (fromCenter.x + (toCenter.x - fromCenter.x) * t) * zoom;
+            double y = (fromCenter.y + (toCenter.y - fromCenter.y) * t) * zoom;
             marker.setBounds((int) (x - size / 2.0), (int) (y - size / 2.0), size, size);
             if (tick[0] >= steps) {
                 timer.stop();

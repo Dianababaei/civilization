@@ -19,20 +19,15 @@ import java.awt.event.MouseEvent;
 import java.util.HashMap;
 import java.util.Map;
 
-/**
- * A single clickable hex tile. Layers everything (terrain, feature, resource, iron,
- * unit, improvement, town hall, fog) in one paintComponent and dispatches a
- * single mouseClicked handler that decides intent from whatever is actually present
- * at the tile - this avoids stacking several overlapping clickable components that
- * could swallow clicks meant for what's underneath.
- *
- * All drawing math below works in a fixed LOCAL coordinate space: a bounding box of
- * width 2*tileRadius, height sqrt(3)*tileRadius, with the hex centered inside it.
- * That local hex polygon never changes - only this component's on-screen bounds
- * (set by applyBounds) move/scale it around the map. This keeps painting independent
- * of the component's absolute position, so there is no coordinate-space mixing between
- * "where this tile sits on the map" and "how to draw the hex inside its own bounds".
- */
+// one hexagon tile on the map. draws all the layers (terrain, resource, unit,
+// improvement, fog etc) on top of each other and handles clicks for that tile.
+// we just use one click handler and check what's on the tile instead of making
+// separate clickable components for each layer, seemed simpler
+//
+// note: the hex shape is always drawn the same way in "local" coordinates
+// (like it's own little box), then that box gets moved/resized to the tile's
+// actual position on screen. makes the math easier since we don't recompute
+// the hexagon points every time
 public class LandGraphical extends JComponent {
 
     private static final double tileRadius = 100;
@@ -140,6 +135,8 @@ public class LandGraphical extends JComponent {
             return;
         }
 
+        // if there's a unit on this tile, select it first (even if town hall is
+        // also here) - you can still open town hall from the toolbar button
         if (land.getCivilizedUnit() != null) {
             if (land.getCivilizedUnit().getOwnerNation() == GameController.getCurrentTurnUser().getNation()) {
                 GameController.setSelectedCivilizedUnit(land.getCivilizedUnit());
@@ -347,6 +344,19 @@ public class LandGraphical extends JComponent {
         if (civilizedUnitImage != null) {
             int s = (int) (tileRadius * 0.5);
             g2.drawImage(civilizedUnitImage, cx - (int) (tileRadius * 0.5), cy - s / 2, s, s, this);
+
+            // small green dot so you can tell a stationed worker apart from just
+            // an idle one standing on the tile (they look the same otherwise)
+            CivilizedUnit occupant = land.getCivilizedUnit();
+            if (occupant != null && occupant.isStationed()) {
+                int dotSize = (int) (tileRadius * 0.16);
+                int dotX = cx - (int) (tileRadius * 0.5) + s - dotSize;
+                int dotY = cy - s / 2;
+                g2.setColor(new Color(0x39d353));
+                g2.fillOval(dotX, dotY, dotSize, dotSize);
+                g2.setColor(new Color(0x0c3d1e));
+                g2.drawOval(dotX, dotY, dotSize, dotSize);
+            }
         }
 
         if (townHallImage != null) {

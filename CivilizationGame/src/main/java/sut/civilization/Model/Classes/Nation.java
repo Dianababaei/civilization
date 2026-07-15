@@ -9,10 +9,13 @@ import java.util.HashMap;
 public class Nation {
 
     // ── Resources ─────────────────────────────────────────────────────────────
+    // these starting amounts are not fixed by the project spec, we just picked
+    // numbers that felt fair for the first few turns (enough to not starve
+    // immediately but still need to build farms etc.)
     private static final int INITIAL_CAPACITY = 200;
-    private static final int INITIAL_FOOD  = 20;
-    private static final int INITIAL_WOOD  = 15;
-    private static final int INITIAL_STONE = 5;
+    private static final int INITIAL_FOOD  = 25;
+    private static final int INITIAL_WOOD  = 20;
+    private static final int INITIAL_STONE = 7;
     private static final int INITIAL_IRON  = 0;
 
     private final Currency food;

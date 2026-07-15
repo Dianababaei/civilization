@@ -6,9 +6,17 @@ import sut.civilization.Model.ModulEnums.*;
 
 public class UnitController extends GameController {
 
-    /** Set true by unitGoForward() when a step lands on a Ruin; the view layer should
-     *  check and clear this after each step to show a "Ruin retrieved!" notification. */
+    // these flags get set inside unitGoForward() so the GUI can react after each step.
+    // gets checked (and reset) by GamePlayController every step of the animation
+
+    // true if this step landed on a ruin, so we know to show the "ruin retrieved" popup
     public static boolean lastStepRetrievedRuin = false;
+
+    // true if the unit couldn't finish its path because the destination got occupied
+    public static boolean lastStepBlocked = false;
+
+    // which tile was occupied and blocked us, so we can show it in the popup message
+    public static Pair<Integer, Integer> lastBlockedHex = null;
 
     /**
      * Validates and queues a path for the selected unit; does NOT move it.
@@ -51,16 +59,28 @@ public class UnitController extends GameController {
 
         Pair<Integer, Integer> next = LandController.getNeighborIndex(unit.getLocation(), neighbor);
 
-        // unitSetPath() only guarantees the final destination is free, since a unit is allowed
-        // to pass next to (through the same hex as) another unit mid-path - only the very last
-        // hex of a move needs to be unoccupied. So an intermediate hex here may already hold a
-        // different unit; only claim next's tile if it doesn't, and only clear the tile we're
-        // leaving if we actually still own it (we may not, if we're just passing through and
-        // never claimed it to begin with).
+        // units are allowed to pass by/through each other while moving, we only care
+        // that the FINAL tile of the path is free. unitSetPath() already checked the
+        // destination was empty when we queued the path, but something could have moved
+        // there since then, so we double check only on the last step
+        boolean isFinalStep = path.length() <= 1;
+        CivilizedUnit occupant = Game.instance.map[next.x][next.y].getCivilizedUnit();
+        if (isFinalStep && occupant != null) {
+            unit.setPath("");
+            unit.setUnitStatus(UnitStatus.AWAKE);
+            lastStepBlocked = true;
+            lastBlockedHex = next;
+            return;
+        }
+
         Land originTile = Game.instance.map[unit.getLocation().x][unit.getLocation().y];
         if (originTile.getCivilizedUnit() == unit) originTile.setCivilizedUnit(null);
 
-        if (Game.instance.map[next.x][next.y].getCivilizedUnit() == null) {
+        // only set the unit on the new tile if that tile is actually empty. if we did this
+        // unconditionally we'd overwrite whatever unit is already standing there (like a
+        // worker just parked mid-path) and it would basically disappear from the map -
+        // this is the bug we had before where units vanished while walking past each other
+        if (occupant == null) {
             Game.instance.map[next.x][next.y].setCivilizedUnit((CivilizedUnit) unit);
         }
         unit.setLocation(next);

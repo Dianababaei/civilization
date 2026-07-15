@@ -107,9 +107,7 @@ public class GameController extends Controller {
             processTownHallQueue(nation);
 
             // ── Step 10g: Unit food consumption ───────────────────────────────
-            // Each living unit consumes 1 food/turn. Applied directly to balance (food is
-            // allowed to float below 0, see Currency.floorAtZero) so the starvation check
-            // below sees the true post-consumption balance, and reflected in netRate for HUD.
+            // every unit eats 1 food per turn
             for (Unit unit : nation.getUnits()) {
                 nation.getFood().add(-1);
                 nation.getFood().addToNetRate(-1);
@@ -180,6 +178,14 @@ public class GameController extends Controller {
                     worker.leaveStation();
                 }
                 tile.setImprovement(null);
+                continue;
+            }
+
+            // An unstaffed building is dormant, not a liability - only charge upkeep while it
+            // actually has workers stationed. Otherwise a Builder placing improvements ahead of
+            // having enough Workers to staff them silently drains Wood for zero output.
+            if (imp.getWorkerCount() == 0) {
+                imp.resetMissedUpkeep();
                 continue;
             }
 
