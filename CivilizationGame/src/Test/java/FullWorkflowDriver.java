@@ -503,11 +503,15 @@ public class FullWorkflowDriver {
         int stoneBefore = nation.getStone().getBalance();
         String result = TownHallController.researchTechnology("Stone Mine Technology");
         info("researchTechnology(Stone Mine): " + result);
-        check("nation.hasTechnology(TECH_STONE_MINE) true after research", nation.hasTechnology(TechnologyType.TECH_STONE_MINE));
+        // phase 2: costs are charged when the research is enqueued...
         check("Wood cost deducted for Stone Mine tech (" + TechnologyType.TECH_STONE_MINE.woodCost + ")",
                 nation.getWood().getBalance() == woodBefore - TechnologyType.TECH_STONE_MINE.woodCost);
         check("Stone cost deducted for Stone Mine tech (" + TechnologyType.TECH_STONE_MINE.stoneCost + ")",
                 nation.getStone().getBalance() == stoneBefore - TechnologyType.TECH_STONE_MINE.stoneCost);
+        // ...but the tech only unlocks after its research time passes in the queue
+        for (int i = 0; i < TechnologyType.TECH_STONE_MINE.turnsToResearch; i++) GameController.nextGameTurn();
+        check("nation.hasTechnology(TECH_STONE_MINE) true after research completes",
+                nation.hasTechnology(TechnologyType.TECH_STONE_MINE));
 
         check("TECH_IRON_MINE now researchable after Stone Mine tech (prereq met)",
                 TechnologyType.TECH_IRON_MINE.isAvailable(nation.getTechnologies()));
@@ -515,9 +519,11 @@ public class FullWorkflowDriver {
         int woodBefore2 = nation.getWood().getBalance();
         String result2 = TownHallController.researchTechnology("Iron Mine Technology");
         info("researchTechnology(Iron Mine) after Stone Mine: " + result2);
-        check("nation.hasTechnology(TECH_IRON_MINE) true after research", nation.hasTechnology(TechnologyType.TECH_IRON_MINE));
         check("Wood cost deducted for Iron Mine tech (" + TechnologyType.TECH_IRON_MINE.woodCost + ")",
                 nation.getWood().getBalance() == woodBefore2 - TechnologyType.TECH_IRON_MINE.woodCost);
+        for (int i = 0; i < TechnologyType.TECH_IRON_MINE.turnsToResearch; i++) GameController.nextGameTurn();
+        check("nation.hasTechnology(TECH_IRON_MINE) true after research completes",
+                nation.hasTechnology(TechnologyType.TECH_IRON_MINE));
     }
 
     // ── 11. Border Expander ─────────────────────────────────────────────────
@@ -736,7 +742,9 @@ public class FullWorkflowDriver {
 
         String techResult = TownHallController.researchTechnology("Town Construction Technology");
         info("researchTechnology(Town Construction): " + techResult);
-        check("nation.hasTechnology(TECH_TOWN) true after research", nation.hasTechnology(TechnologyType.TECH_TOWN));
+        // phase 2: research is queued - advance turns until it completes
+        for (int i = 0; i < TechnologyType.TECH_TOWN.turnsToResearch; i++) GameController.nextGameTurn();
+        check("nation.hasTechnology(TECH_TOWN) true after research completes", nation.hasTechnology(TechnologyType.TECH_TOWN));
 
         // Need a Builder with charges left and a resource-free hex (mountain, or empty meadow/plain) in territory.
         CivilizedUnit builder = null;
