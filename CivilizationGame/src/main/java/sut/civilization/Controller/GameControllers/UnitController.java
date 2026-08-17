@@ -32,11 +32,11 @@ public class UnitController extends GameController {
         int originNum = LandController.getLandNumber(origin);
         int destNum = LandController.getLandNumber(dest);
         if (dest.getCivilizedUnit() != null)
-            return "There already is a civilized unit in destination";
+            return "There already is a civilized unit in destination!";
         if (Game.instance.dist[originNum][destNum] < 1000) {
             selectedUnit.setPath(Game.instance.path[originNum][destNum]);
         } else
-            return "Unit can't reach there";
+            return "Unit can't reach there!";
         return "Unit moving...";
     }
 

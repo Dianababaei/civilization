@@ -34,6 +34,22 @@ public class WorkerController extends GameController {
         if (tile.getImprovement() != null)
             return "There is already an improvement here!";
 
+        // phase 2: trading posts are neutral, pre-placed structures - never buildable
+        if (type == ImprovementType.TRADING_POST)
+            return "Trading Posts are neutral structures and cannot be built!";
+
+        // phase 2: bazaar needs a level 2 town hall (settlement), and only one per nation
+        if (type == ImprovementType.BAZAAR) {
+            if (nation.getTownHall() == null || nation.getTownHall().getLevel() < 2)
+                return "Bazaar requires a level 2 Town Hall (Settlement)!";
+            for (Pair<Integer, Integer> hex : nation.getTerritory()) {
+                if (!Pair.isValid(hex)) continue;
+                Improvement other = Game.instance.map[hex.x][hex.y].getImprovement();
+                if (other != null && other.getImprovementType() == ImprovementType.BAZAAR)
+                    return "You already have a Bazaar!";
+            }
+        }
+
         // tech checks
         if (type.requiresStoneTech && !nation.hasTechnology(TechnologyType.TECH_STONE_MINE))
             return "Requires Stone Mine technology!";
@@ -92,7 +108,7 @@ public class WorkerController extends GameController {
         for (ImprovementType t : ImprovementType.values())
             if (t.name.equalsIgnoreCase(name)) { type = t; break; }
         if (type == null)
-            return "Unknown improvement: " + name;
+            return "Unknown improvement: " + name + "!";
 
         String blocked = checkCanBuild(type);
         if (blocked != null) return blocked;
@@ -174,6 +190,74 @@ public class WorkerController extends GameController {
         improvement.removeWorker(selectedCivilizedUnit);
         selectedCivilizedUnit.leaveStation();
         return "Worker removed from " + improvement.getImprovementType().name + ".";
+    }
+
+    // ── Phase 2: voluntary demolition ─────────────────────────────────────────
+    // Builder demolishes a building on its own hex, or (if its hex is empty) on a
+    // neighboring hex. Costs 1 AP, no resource refund, stationed workers are freed.
+    // Town Hall isn't an Improvement so it's automatically exempt; Trading Posts are
+    // neutral and explicitly protected.
+
+    public static final int DEMOLISH_AP_COST = 1;
+
+    /** The tile whose improvement would be demolished, or null if there's no target. */
+    public static Land findDemolishTarget() {
+        if (selectedCivilizedUnit == null) return null;
+        Nation nation = currentTurnUser.getNation();
+        Pair<Integer, Integer> here = selectedCivilizedUnit.getLocation();
+        Land own = Game.instance.map[here.x][here.y];
+        if (own.getImprovement() != null) return own;
+        for (Pair<Integer, Integer> nb : LandController.getAllNeighborsIndexes(here)) {
+            if (!Pair.isValid(nb)) continue;
+            if (!nation.ownsHex(nb.x, nb.y)) continue;
+            Land tile = Game.instance.map[nb.x][nb.y];
+            if (tile.getImprovement() != null
+                    && tile.getImprovement().getImprovementType() != ImprovementType.TRADING_POST)
+                return tile;
+        }
+        return null;
+    }
+
+    // null = demolition would work, otherwise the reason it can't
+    public static String checkCanDemolish() {
+        if (selectedCivilizedUnit == null)
+            return "Select a Builder first!";
+        if (selectedCivilizedUnit.getCivilizedUnitType() != CivilizedUnitType.BUILDER)
+            return "Selected unit is not a Builder!";
+        if (!selectedCivilizedUnit.hasAp(DEMOLISH_AP_COST))
+            return "Builder has no AP left!";
+
+        Land target = findDemolishTarget();
+        if (target == null)
+            return "No building on this hex or a neighboring hex to demolish!";
+        if (target.getImprovement().getImprovementType() == ImprovementType.TRADING_POST)
+            return "Trading Posts are neutral and cannot be demolished!";
+        Nation nation = currentTurnUser.getNation();
+        if (!nation.ownsHex(target.getI(), target.getJ()))
+            return "You can only demolish buildings inside your territory!";
+        return null;
+    }
+
+    public static String demolishImprovement() {
+        String blocked = checkCanDemolish();
+        if (blocked != null) return blocked;
+
+        Nation nation = currentTurnUser.getNation();
+        Land target = findDemolishTarget();
+        Improvement imp = target.getImprovement();
+        ImprovementType type = imp.getImprovementType();
+
+        // free any stationed workers before the building disappears
+        for (CivilizedUnit worker : new java.util.ArrayList<>(imp.getStationedWorkers())) {
+            imp.removeWorker(worker);
+            worker.leaveStation();
+        }
+        // demolished towns no longer raise the unit cap
+        if (type == ImprovementType.TOWN) nation.removeTownUnitCapBonus();
+
+        target.setImprovement(null);
+        selectedCivilizedUnit.spendAp(DEMOLISH_AP_COST);
+        return type.name + " demolished. Build costs are NOT refunded.";
     }
 
     // repairs a broken improvement (kept around for backward compat with UnitStatus)

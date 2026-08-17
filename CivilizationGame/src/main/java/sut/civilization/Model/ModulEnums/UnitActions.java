@@ -21,6 +21,8 @@ public enum UnitActions {
     FORTIFY(new ImageIcon(Civilization.class.getResource("/sut/civilization/Images/unitActions/Fortify.png")), "Fortify"),
     BUILD_IMPROVEMENT(new ImageIcon(Civilization.class.getResource("/sut/civilization/Images/unitActions/Build Improvement.png")), "Build Improvement"),
     REMOVE_FEATURE(new ImageIcon(Civilization.class.getResource("/sut/civilization/Images/unitActions/Remove Feature.png")), "Remove Feature"),
+    // Phase 2: Builder demolishes a building on its own or a neighboring hex (no refund)
+    DEMOLISH(new ImageIcon(Civilization.class.getResource("/sut/civilization/Images/unitActions/Remove Feature.png")), "Demolish Building"),
     ALERT(new ImageIcon(Civilization.class.getResource("/sut/civilization/Images/unitActions/Alert.png")), "Alert")
     ;
 

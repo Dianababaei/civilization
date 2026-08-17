@@ -33,7 +33,7 @@ public enum CivilizedUnitType {
                 this.actions = new UnitActions[]{UnitActions.MOVE, UnitActions.SLEEP, UnitActions.WAKE};
                 break;
             case "Builder":
-                this.actions = new UnitActions[]{UnitActions.MOVE, UnitActions.BUILD_IMPROVEMENT, UnitActions.SLEEP, UnitActions.WAKE};
+                this.actions = new UnitActions[]{UnitActions.MOVE, UnitActions.BUILD_IMPROVEMENT, UnitActions.DEMOLISH, UnitActions.SLEEP, UnitActions.WAKE};
                 break;
             case "Worker":
                 this.actions = new UnitActions[]{UnitActions.MOVE, UnitActions.REPAIR, UnitActions.SLEEP, UnitActions.WAKE};

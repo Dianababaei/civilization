@@ -105,6 +105,69 @@ public enum ImprovementType {
         null,                // any resource-free tile (checked at runtime)
         null,
         false, false, true
+    ),
+
+    // Monument (Phase 2) - plain tiles, +2 happiness, no production and no workers
+    MONUMENT(
+        "Monument",
+        null,                // produces nothing
+        0,
+        ResourceType.WOOD,
+        0,                   // no upkeep (it has no workers so upkeep never charges anyway)
+        10, 15, 0,           // 10 wood + 15 stone
+        2,
+        0,                   // no workers
+        LandType.PLAIN,
+        null,
+        false, false, false
+    ),
+
+    // Bazaar (Phase 2) - trade building, needs Town Hall level 2 (checked at runtime);
+    // opens the trade panel: exchange resources at 50/60/70% rates depending on tier
+    BAZAAR(
+        "Bazaar",
+        null,                // produces nothing directly
+        0,
+        ResourceType.WOOD,
+        0,
+        20, 10, 0,           // 20 wood + 10 stone
+        2,
+        0,                   // no workers
+        null,                // any land type inside territory
+        null,
+        false, false, false
+    ),
+
+    // Military Stable (Phase 2) - plain hexes; will enable Cavalry training once
+    // military units exist. No production, no workers.
+    MILITARY_STABLE(
+        "Military Stable",
+        null,
+        0,
+        ResourceType.WOOD,
+        0,
+        8, 4, 0,             // 8 wood + 4 stone
+        2,
+        0,
+        LandType.PLAIN,
+        null,
+        false, false, false
+    ),
+
+    // Trading Post (Phase 2) - NOT buildable; pre-placed neutral structure on the map.
+    // Trades at 80% once it falls inside your territory.
+    TRADING_POST(
+        "Trading Post",
+        null,
+        0,
+        ResourceType.WOOD,
+        0,
+        0, 0, 0,
+        0,
+        0,
+        null,
+        null,
+        false, false, false
     );
 
     public final String name;

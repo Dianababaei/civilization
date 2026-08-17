@@ -227,7 +227,43 @@ public class LandController extends Controller {
             }
         }
 
+        // phase 2: pre-place a couple of neutral Trading Posts at map generation.
+        // they trade at 80% but only once they end up inside your territory. never
+        // right next to the town hall - the player should have to expand to reach one
+        placeTradingPosts(map, thCoord, random);
+
+        // phase 2: mark ~2 mountains as volcanoes (visually distinct subtype; only
+        // these will be able to erupt once the disaster system lands)
+        int volcanoes = 0, vAttempts = 0;
+        while (volcanoes < 2 && vAttempts < 200) {
+            vAttempts++;
+            int i = random.nextInt(Consts.MAP_SIZE.amount.x);
+            int j = random.nextInt(Consts.MAP_SIZE.amount.y);
+            if (map[i][j].getLandType() != LandType.MOUNTAIN || map[i][j].isVolcano()) continue;
+            map[i][j].setVolcano(true);
+            volcanoes++;
+        }
+
         return map;
+    }
+
+    // drops 2 neutral trading posts on random empty non-mountain tiles, 3-6 hexes
+    // away from the starting town hall (close enough to actually find and reach,
+    // but never right next to it). they start under normal fog like everything else
+    private static void placeTradingPosts(Land[][] map, Pair<Integer, Integer> thCoord, Random random) {
+        int placed = 0, attempts = 0;
+        while (placed < 2 && attempts < 300) {
+            attempts++;
+            int i = random.nextInt(Consts.MAP_SIZE.amount.x);
+            int j = random.nextInt(Consts.MAP_SIZE.amount.y);
+            Land tile = map[i][j];
+            if (tile.getLandType() == LandType.MOUNTAIN) continue;
+            if (tile.getImprovement() != null || tile.getRuin() != null) continue;
+            int dist = Math.abs(i - thCoord.x) + Math.abs(j - thCoord.y);
+            if (dist < 3 || dist > 6) continue;
+            tile.setImprovement(new Improvement(ImprovementType.TRADING_POST));
+            placed++;
+        }
     }
 
     // makes sure the town hall's neighbor ring has at least one farm tile (meadow+food) and

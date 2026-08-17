@@ -89,11 +89,18 @@ public class Nation {
     }
 
     // ── Unit Cap ──────────────────────────────────────────────────────────────
+    // phase 2: the town hall level also raises the cap (+5 per level above 1)
 
-    public int getUnitCap() { return baseUnitCap + extraUnitCap; }
+    private static final int UNIT_CAP_PER_TH_LEVEL = 5;
+
+    public int getUnitCap() {
+        int thBonus = (townHall == null) ? 0 : (townHall.getLevel() - 1) * UNIT_CAP_PER_TH_LEVEL;
+        return baseUnitCap + extraUnitCap + thBonus;
+    }
     public int getUnitCount() { return units.size(); }
     public boolean canTrainUnit() { return units.size() < getUnitCap(); }
     public void addTownUnitCapBonus() { extraUnitCap += UNIT_CAP_PER_TOWN; }
+    public void removeTownUnitCapBonus() { extraUnitCap = Math.max(0, extraUnitCap - UNIT_CAP_PER_TOWN); }
 
     // player picks the starting unit cap at game start (not a fixed number), call this
     // before any town bonuses get applied
@@ -148,4 +155,71 @@ public class Nation {
 
     public TownHall getTownHall() { return townHall; }
     public void setTownHall(TownHall townHall) { this.townHall = townHall; }
+
+    // ── Trade (Phase 2) ───────────────────────────────────────────────────────
+    // one transaction per turn per facility; flags reset in nextGameTurn
+
+    private boolean bazaarUsedThisTurn = false;
+    private boolean tradingPostUsedThisTurn = false;
+
+    public boolean isBazaarUsedThisTurn() { return bazaarUsedThisTurn; }
+    public void setBazaarUsedThisTurn(boolean v) { bazaarUsedThisTurn = v; }
+    public boolean isTradingPostUsedThisTurn() { return tradingPostUsedThisTurn; }
+    public void setTradingPostUsedThisTurn(boolean v) { tradingPostUsedThisTurn = v; }
+
+    public void resetTradeFlags() {
+        bazaarUsedThisTurn = false;
+        tradingPostUsedThisTurn = false;
+    }
+
+    public boolean hasImprovementInTerritory(sut.civilization.Model.ModulEnums.ImprovementType type) {
+        for (Pair<Integer, Integer> hex : territory) {
+            if (!Pair.isValid(hex)) continue;
+            Improvement imp = Game.instance.map[hex.x][hex.y].getImprovement();
+            if (imp != null && imp.getImprovementType() == type) return true;
+        }
+        return false;
+    }
+
+    // ── Happiness (Phase 2) ───────────────────────────────────────────────────
+    // Recomputed from current state every call (no stored counter to go stale):
+    //   -1 per Town (each new settlement makes people grumpy)
+    //   -1 while the unit cap is maxed out (crowding)
+    //   +2 per Monument
+    //   +1 if a unit is garrisoned on the Town Hall tile (people feel safe)
+    // Tiers: >= +3 Golden Age (+10% production) | -3..-4 workers each produce 1 less |
+    //        <= -5 riot: worker penalty AND every unit loses 1 AP per turn
+
+    // debug-panel only: fake happiness added on top of the real factors, so the
+    // golden age / strike / riot tiers can be demoed without building 5 towns
+    private int debugHappinessOffset = 0;
+
+    public void addDebugHappiness(int delta) { debugHappinessOffset += delta; }
+
+    public int getHappiness() {
+        int happiness = debugHappinessOffset;
+        for (Pair<Integer, Integer> hex : territory) {
+            if (!Pair.isValid(hex)) continue;
+            Improvement imp = Game.instance.map[hex.x][hex.y].getImprovement();
+            if (imp == null) continue;
+            if (imp.getImprovementType() == sut.civilization.Model.ModulEnums.ImprovementType.TOWN) happiness -= 1;
+            if (imp.getImprovementType() == sut.civilization.Model.ModulEnums.ImprovementType.MONUMENT) happiness += 2;
+        }
+        if (units.size() >= getUnitCap()) happiness -= 1;
+        if (townHall != null && townHall.getMainLand() != null
+                && townHall.getMainLand().getCivilizedUnit() != null
+                && townHall.getMainLand().getCivilizedUnit().getOwnerNation() == this) {
+            happiness += 1;
+        }
+        return happiness;
+    }
+
+    public boolean isInGoldenAge() { return getHappiness() >= 3; }
+    public boolean isUnhappy()     { return getHappiness() <= -3; }
+    public boolean isInRiot()      { return getHappiness() <= -5; }
+
+    // last happiness tier we notified the player about (0 normal, 1 golden, -1 strike, -2 riot)
+    private int lastHappinessTier = 0;
+    public int getLastHappinessTier() { return lastHappinessTier; }
+    public void setLastHappinessTier(int t) { lastHappinessTier = t; }
 }

@@ -6,7 +6,7 @@ import sut.civilization.Model.ModulEnums.TechnologyType;
 
 public class TownHallController {
 
-    // ── Tech research ─────────────────────────────────────────────────────────
+    // ── Tech research (Phase 2: goes through the production queue, takes N turns) ──
 
     public static String researchTechnology(String techName) {
         Nation nation = GameController.getCurrentTurnUser().getNation();
@@ -16,22 +16,30 @@ public class TownHallController {
 
         TechnologyType tech = findTech(techName);
         if (tech == null)
-            return "Unknown technology: " + techName;
+            return "Unknown technology: " + techName + "!";
 
         if (nation.hasTechnology(tech))
-            return tech.name + " already researched.";
+            return tech.name + " is already researched!";
+
+        if (townHall.isBusy())
+            return "The Town Hall is busy with " + townHall.getCurrentProduction().getDisplayName()
+                    + "! Cancel it first (no refund).";
 
         if (!tech.isAvailable(nation.getTechnologies()))
-            return "Prerequisite not met for " + tech.name + ".";
+            return "Prerequisite not met for " + tech.name + "!";
+
+        if (townHall.getLevel() < tech.requiredTownHallLevel)
+            return tech.name + " requires Town Hall level " + tech.requiredTownHallLevel + "!";
 
         if (!nation.canAfford(0, tech.woodCost, tech.stoneCost, tech.ironCost))
             return "Not enough resources. Need: "
                     + tech.woodCost + " wood, "
                     + tech.stoneCost + " stone, "
-                    + tech.ironCost + " iron.";
+                    + tech.ironCost + " iron!";
 
-        boolean done = townHall.researchTechnology(tech);
-        return done ? tech.name + " researched." : "Cannot research " + tech.name + " right now.";
+        boolean ok = townHall.enqueueResearch(tech);
+        return ok ? tech.name + " added to production queue (" + tech.turnsToResearch + " turns)."
+                  : "Cannot research " + tech.name + " right now!";
     }
 
     // ── Unit training ─────────────────────────────────────────────────────────
@@ -44,17 +52,64 @@ public class TownHallController {
 
         CivilizedUnitType type = findUnitType(unitName);
         if (type == null)
-            return "Unknown unit type: " + unitName;
+            return "Unknown unit type: " + unitName + "!";
+
+        if (townHall.isBusy())
+            return "The Town Hall is busy with " + townHall.getCurrentProduction().getDisplayName()
+                    + "! Cancel it first (no refund).";
 
         if (!nation.canTrainUnit())
-            return "Unit cap reached (" + nation.getUnitCap() + "). Build a Town to increase cap.";
+            return "Unit cap reached (" + nation.getUnitCap() + "). Build a Town or upgrade the Town Hall!";
 
         if (nation.getFood().getBalance() < type.productionCostFood)
-            return "Not enough food. Need " + type.productionCostFood + " food.";
+            return "Not enough food. Need " + type.productionCostFood + " food!";
 
         boolean ok = townHall.enqueueUnit(type);
         return ok ? type.name + " added to production queue."
-                  : "Cannot train " + type.name + " right now.";
+                  : "Cannot train " + type.name + " right now!";
+    }
+
+    // ── Town Hall upgrade (Phase 2) ───────────────────────────────────────────
+
+    public static String upgradeTownHall() {
+        Nation nation = GameController.getCurrentTurnUser().getNation();
+        TownHall townHall = nation.getTownHall();
+        if (townHall == null)
+            return "No Town Hall built yet!";
+
+        if (townHall.getLevel() >= TownHall.MAX_LEVEL)
+            return "Town Hall is already at max level!";
+        if (townHall.isBusy())
+            return "The Town Hall is busy with " + townHall.getCurrentProduction().getDisplayName()
+                    + "! Cancel it first (no refund).";
+
+        int target = townHall.getLevel() + 1;
+        int wood  = (target == 2) ? TownHall.L2_WOOD  : TownHall.L3_WOOD;
+        int stone = (target == 2) ? TownHall.L2_STONE : TownHall.L3_STONE;
+        int iron  = (target == 2) ? TownHall.L2_IRON  : TownHall.L3_IRON;
+        int turns = (target == 2) ? TownHall.L2_TURNS : TownHall.L3_TURNS;
+
+        if (!nation.canAfford(0, wood, stone, iron))
+            return "Not enough resources. Need: " + wood + " wood, " + stone + " stone, " + iron + " iron!";
+
+        boolean ok = townHall.enqueueTownHallUpgrade();
+        return ok ? "Upgrade to " + (target == 2 ? "Settlement" : "Capital")
+                        + " added to production queue (" + turns + " turns)."
+                  : "Cannot upgrade the Town Hall right now!";
+    }
+
+    // ── Cancel current production (Phase 2: no refund per spec) ───────────────
+
+    public static String cancelCurrentProduction() {
+        Nation nation = GameController.getCurrentTurnUser().getNation();
+        TownHall townHall = nation.getTownHall();
+        if (townHall == null)
+            return "No Town Hall built yet!";
+        if (!townHall.hasQueuedProduction())
+            return "The production queue is empty!";
+
+        ProductionOrder cancelled = townHall.cancelCurrent();
+        return cancelled.getDisplayName() + " cancelled. Spent resources are NOT refunded.";
     }
 
     // ── border expander: expand territory ────────────────────────────────────

@@ -27,6 +27,8 @@ public class Land {
     // 2 -> visible (shown)
     protected Resource resource;
     protected boolean hasIron = false;
+    /** Phase 2: volcano hexes are a visually distinct mountain subtype set at map generation. */
+    protected boolean isVolcano = false;
     /** Independent depletable iron deposit; only set on mountain tiles where hasIron is true. */
     protected Resource ironResource;
     //TODO assign land's movement cost it's landType movement cost when initializing map
@@ -76,7 +78,10 @@ public class Land {
     }
 
     public int getMP() {
-        return landType.movementCost;
+        // phase 2 seasons: winter makes every land hex cost 1 extra AP to enter
+        int winterPenalty = sut.civilization.Model.ModulEnums.Season.forTurn(Game.instance.getTurn())
+                == sut.civilization.Model.ModulEnums.Season.WINTER ? 1 : 0;
+        return landType.movementCost + winterPenalty;
     }
 
     public int getCost() {
@@ -181,6 +186,9 @@ public class Land {
     public void setHasIron(boolean hasIron) {
         this.hasIron = hasIron;
     }
+
+    public boolean isVolcano() { return isVolcano; }
+    public void setVolcano(boolean volcano) { isVolcano = volcano; }
 
     public Resource getIronResource() {
         return ironResource;
