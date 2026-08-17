@@ -162,6 +162,13 @@ public class LandGraphical extends JComponent {
     public void updateMap() {
         StringBuilder landInfo = new StringBuilder(land.getLandType().name + " at (" + land.getI() + " , " + land.getJ() + ")");
 
+        // phase 2: volcano hexes are a visually distinct mountain subtype
+        if (land.isVolcano()) {
+            Image volcano = loadImage("/sut/civilization/Images/tiles/Volcano.png");
+            if (volcano != null) terrainImage = volcano;
+            landInfo.append("\nVOLCANO - the only mountains that can erupt");
+        }
+
         if (land.getLandFeature() != null) {
             landFeatureImage = loadImage("/sut/civilization/Images/tiles/" + land.getLandFeature().getLandFeatureType().name + ".png");
             landInfo.append("\nFeature: ").append(land.getLandFeature().getLandFeatureType().name);
@@ -249,6 +256,16 @@ public class LandGraphical extends JComponent {
         return tooltipText;
     }
 
+    /** Translucent overlay for the current season (null = no tint in summer). */
+    private static Color seasonTintColor() {
+        switch (sut.civilization.Model.ModulEnums.Season.forTurn(Game.instance.getTurn())) {
+            case SPRING: return new Color(110, 220, 110, 22);  // light green
+            case AUTUMN: return new Color(225, 140, 40, 45);   // orange
+            case WINTER: return new Color(220, 235, 255, 85);  // snowy blue-white
+            default:     return null;                          // summer - natural colors
+        }
+    }
+
     @Override
     protected void paintComponent(Graphics g) {
         Graphics2D g2 = (Graphics2D) g.create();
@@ -269,6 +286,12 @@ public class LandGraphical extends JComponent {
             g2.drawImage(terrainImage, 0, 0, LOCAL_W, LOCAL_H, this);
         } else {
             g2.setColor(new Color(60, 60, 60));
+            g2.fillPolygon(LOCAL_HEX);
+        }
+        // phase 2 seasons: tint the whole map so the current season is obvious at a glance
+        Color seasonTint = seasonTintColor();
+        if (seasonTint != null) {
+            g2.setColor(seasonTint);
             g2.fillPolygon(LOCAL_HEX);
         }
         g2.setClip(oldClip);

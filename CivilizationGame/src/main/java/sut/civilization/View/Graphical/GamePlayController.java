@@ -37,10 +37,12 @@ public class GamePlayController extends ViewController {
     public JLabel stoneInfo;
     public JLabel ironInfo;
     public JLabel unitCapInfo;
+    public JLabel happinessInfo;
     public JLabel starvationLabel;
     public JLabel buildingWarningLabel;
     public JLabel turn;
     public JLabel yearLabel;
+    public JLabel seasonLabel;
 
     public JLabel productionUnitName;
     public JLabel productionTurnsLeft;
@@ -152,6 +154,7 @@ public class GamePlayController extends ViewController {
         stoneInfo = hudLabel();
         ironInfo = hudLabel();
         unitCapInfo = hudLabel();
+        happinessInfo = hudLabel();
         starvationLabel = hudLabel();
         starvationLabel.setText("STARVING!");
         starvationLabel.setForeground(Color.RED);
@@ -161,30 +164,39 @@ public class GamePlayController extends ViewController {
         buildingWarningLabel.setVisible(false);
         turn = hudLabel();
         yearLabel = hudLabel();
+        seasonLabel = hudLabel();
 
         hud.add(labeled("Food:", foodInfo));
         hud.add(labeled("Wood:", woodInfo));
         hud.add(labeled("Stone:", stoneInfo));
         hud.add(labeled("Iron:", ironInfo));
         hud.add(labeled("Units:", unitCapInfo));
+        hud.add(labeled("Happiness:", happinessInfo));
         hud.add(turn);
         hud.add(yearLabel);
+        hud.add(seasonLabel);
         hud.add(starvationLabel);
         hud.add(buildingWarningLabel);
 
         JButton townHallBtn = hudButton("Town Hall");
+        JButton tradeBtn = hudButton("Trade");
         JButton unitsBtn = hudButton("Units");
         JButton statsBtn = hudButton("Stats");
+        JButton debugBtn = hudButton("Debug");
         JButton menuBtn = hudButton("Menu");
 
         townHallBtn.addActionListener(e -> showTownHallPanel());
+        tradeBtn.addActionListener(e -> showTradePanel());
         unitsBtn.addActionListener(e -> showUnits());
         statsBtn.addActionListener(e -> showDemographics());
+        debugBtn.addActionListener(e -> showDebugPanel());
         menuBtn.addActionListener(e -> showMenu());
 
         hud.add(townHallBtn);
+        hud.add(tradeBtn);
         hud.add(unitsBtn);
         hud.add(statsBtn);
+        hud.add(debugBtn);
         hud.add(menuBtn);
 
         overlayLayer.add(hud);
@@ -348,8 +360,226 @@ public class GamePlayController extends ViewController {
 
     public void showDiplomacies() { }
     public void showDiplomacyPanel(Nation nation) { }
-    public void showTradePanel() { }
     public void showEconomics() { }
+
+    // ── Debug panel (for testing/demo: instant resources + fast turns) ───────
+
+    public void showDebugPanel() {
+        JPanel content = new JPanel();
+        content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
+        content.setBackground(new Color(0x1e1e1e));
+        content.setBorder(BorderFactory.createEmptyBorder(20, 20, 20, 20));
+
+        JLabel header = new JLabel("Debug / Demo tools");
+        header.setFont(new Font("SansSerif", Font.BOLD, 16));
+        header.setForeground(new Color(0xf0c060));
+        content.add(header);
+
+        JLabel hint = new JLabel("For testing: get resources instantly and skip turns.");
+        hint.setForeground(new Color(0xaaaaaa));
+        content.add(hint);
+
+        JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        row.setOpaque(false);
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 44));
+
+        JButton res100 = new JButton("+100 all resources");
+        JButton turn1 = new JButton("Skip 1 turn");
+        JButton turn5 = new JButton("Skip 5 turns");
+        JButton fillCap = new JButton("Fill units to cap");
+        JButton reveal = new JButton("Reveal map");
+        JButton happyUp = new JButton("Happiness +1");
+        JButton happyDown = new JButton("Happiness -1");
+        for (JButton b : new JButton[]{res100, turn1, turn5, fillCap, reveal}) {
+            b.setBackground(new Color(0x1a5276));
+            b.setForeground(Color.WHITE);
+            row.add(b);
+        }
+
+        JPanel row2 = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        row2.setOpaque(false);
+        row2.setMaximumSize(new Dimension(Integer.MAX_VALUE, 44));
+        for (JButton b : new JButton[]{happyUp, happyDown}) {
+            b.setBackground(new Color(0x1a5276));
+            b.setForeground(Color.WHITE);
+            row2.add(b);
+        }
+        res100.addActionListener(e -> {
+            String msg = CheatController.debugAddAllResources(100);
+            showPopUp(SwingUtilities.getWindowAncestor(root), msg);
+            updateHud();
+        });
+        turn1.addActionListener(e -> {
+            String msg = CheatController.debugAdvanceTurns(1);
+            showPopUp(SwingUtilities.getWindowAncestor(root), msg);
+            updateWholeMap();
+            updateHud();
+        });
+        turn5.addActionListener(e -> {
+            String msg = CheatController.debugAdvanceTurns(5);
+            showPopUp(SwingUtilities.getWindowAncestor(root), msg);
+            updateWholeMap();
+            updateHud();
+        });
+        fillCap.addActionListener(e -> {
+            String msg = CheatController.debugFillUnitsToCap();
+            showPopUp(SwingUtilities.getWindowAncestor(root), msg);
+            updateWholeMap();
+            updateHud();
+        });
+        reveal.addActionListener(e -> {
+            String msg = CheatController.debugRevealMap();
+            showPopUp(SwingUtilities.getWindowAncestor(root), msg);
+            updateWholeMap();
+            updateHud();
+        });
+        happyUp.addActionListener(e -> {
+            showPopUp(SwingUtilities.getWindowAncestor(root), CheatController.debugAdjustHappiness(1));
+            updateHud();
+        });
+        happyDown.addActionListener(e -> {
+            showPopUp(SwingUtilities.getWindowAncestor(root), CheatController.debugAdjustHappiness(-1));
+            updateHud();
+        });
+        content.add(row);
+        content.add(row2);
+
+        JScrollPane scrollPane = new JScrollPane(content);
+        scrollPane.setPreferredSize(new Dimension(580, 170));
+        showPopupPanel(scrollPane);
+    }
+
+    // ── Trade panel (Phase 2: Bazaar + Trading Post) ─────────────────────────
+
+    // last dropdown choices, kept across panel reopens
+    private ResourceType lastTradeSell = ResourceType.FOOD;
+    private ResourceType lastTradeReceive = ResourceType.WOOD;
+
+    public void showTradePanel() {
+        Nation nation = GameController.getCurrentTurnUser().getNation();
+        boolean hasBazaar = TradeController.hasBazaar(nation);
+        boolean hasPost = TradeController.hasTradingPost(nation);
+
+        JPanel content = new JPanel();
+        content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
+        content.setBackground(new Color(0x1e1e1e));
+        content.setBorder(BorderFactory.createEmptyBorder(20, 20, 20, 20));
+
+        JLabel header = new JLabel("Trade");
+        header.setFont(new Font("SansSerif", Font.BOLD, 16));
+        header.setForeground(new Color(0xf0c060));
+        content.add(header);
+
+        // shared sell/receive pickers - remember the player's last choice so the
+        // selection survives the panel reopening after each trade
+        JComboBox<ResourceType> sellBox = new JComboBox<>(ResourceType.values());
+        JComboBox<ResourceType> receiveBox = new JComboBox<>(ResourceType.values());
+        sellBox.setSelectedItem(lastTradeSell);
+        receiveBox.setSelectedItem(lastTradeReceive);
+        sellBox.addActionListener(e -> lastTradeSell = (ResourceType) sellBox.getSelectedItem());
+        receiveBox.addActionListener(e -> lastTradeReceive = (ResourceType) receiveBox.getSelectedItem());
+        JPanel pickers = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        pickers.setOpaque(false);
+        JLabel sellLbl = new JLabel("Sell:");
+        sellLbl.setForeground(Color.WHITE);
+        JLabel recvLbl = new JLabel("Receive:");
+        recvLbl.setForeground(Color.WHITE);
+        pickers.add(sellLbl);
+        pickers.add(sellBox);
+        pickers.add(recvLbl);
+        pickers.add(receiveBox);
+        pickers.setMaximumSize(new Dimension(Integer.MAX_VALUE, 40));
+        content.add(pickers);
+
+        // ── Bazaar section ──────────────────────────────────────────────────
+        JLabel bazaarHeader = new JLabel("Bazaar - sell exactly 10 (50%), 100 (60%) or 500 (70%). One trade per turn.");
+        bazaarHeader.setFont(new Font("SansSerif", Font.BOLD, 12));
+        bazaarHeader.setForeground(new Color(0xaaaaaa));
+        bazaarHeader.setBorder(BorderFactory.createEmptyBorder(10, 0, 4, 0));
+        content.add(bazaarHeader);
+
+        if (!hasBazaar) {
+            JLabel none = new JLabel("No Bazaar yet - build one with a Builder (needs a level 2 Town Hall).");
+            none.setForeground(Color.WHITE);
+            content.add(none);
+        } else if (nation.isBazaarUsedThisTurn()) {
+            JLabel used = new JLabel("The Bazaar already traded this turn.");
+            used.setForeground(Color.ORANGE);
+            content.add(used);
+        } else {
+            JPanel bazaarRow = new JPanel(new FlowLayout(FlowLayout.LEFT));
+            bazaarRow.setOpaque(false);
+            bazaarRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 44));
+            for (int amount : new int[]{10, 100, 500}) {
+                int rate = (int) (TradeController.bazaarRateFor(amount) * 100);
+                JButton b = new JButton("Sell " + amount + " @" + rate + "%");
+                b.setBackground(new Color(0x5d4037));
+                b.setForeground(Color.WHITE);
+                b.addActionListener(e -> {
+                    String msg = TradeController.tradeAtBazaar(
+                            (ResourceType) sellBox.getSelectedItem(),
+                            (ResourceType) receiveBox.getSelectedItem(), amount);
+                    showPopUp(SwingUtilities.getWindowAncestor(root), msg);
+                    updateHud();
+                    closeActivePopup();
+                    showTradePanel();
+                });
+                bazaarRow.add(b);
+            }
+            content.add(bazaarRow);
+        }
+
+        // ── Trading Post section ────────────────────────────────────────────
+        JLabel postHeader = new JLabel("Trading Post - any amount at 80%. One trade per turn. Must be inside your territory.");
+        postHeader.setFont(new Font("SansSerif", Font.BOLD, 12));
+        postHeader.setForeground(new Color(0xaaaaaa));
+        postHeader.setBorder(BorderFactory.createEmptyBorder(10, 0, 4, 0));
+        content.add(postHeader);
+
+        if (!hasPost) {
+            JLabel none = new JLabel("No Trading Post inside your territory - expand your borders to reach one.");
+            none.setForeground(Color.WHITE);
+            content.add(none);
+        } else if (nation.isTradingPostUsedThisTurn()) {
+            JLabel used = new JLabel("The Trading Post already traded this turn.");
+            used.setForeground(Color.ORANGE);
+            content.add(used);
+        } else {
+            JPanel postRow = new JPanel(new FlowLayout(FlowLayout.LEFT));
+            postRow.setOpaque(false);
+            postRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 44));
+            JLabel amountLbl = new JLabel("Amount:");
+            amountLbl.setForeground(Color.WHITE);
+            JTextField amountField = new JTextField("10", 5);
+            JButton tradeBtn = new JButton("Trade @80%");
+            tradeBtn.setBackground(new Color(0x5d4037));
+            tradeBtn.setForeground(Color.WHITE);
+            tradeBtn.addActionListener(e -> {
+                int amount;
+                try {
+                    amount = Integer.parseInt(amountField.getText().trim());
+                } catch (NumberFormatException ex) {
+                    showPopUp(SwingUtilities.getWindowAncestor(root), "Enter a valid number to trade!");
+                    return;
+                }
+                String msg = TradeController.tradeAtTradingPost(
+                        (ResourceType) sellBox.getSelectedItem(),
+                        (ResourceType) receiveBox.getSelectedItem(), amount);
+                showPopUp(SwingUtilities.getWindowAncestor(root), msg);
+                updateHud();
+                closeActivePopup();
+                showTradePanel();
+            });
+            postRow.add(amountLbl);
+            postRow.add(amountField);
+            postRow.add(tradeBtn);
+            content.add(postRow);
+        }
+
+        JScrollPane scrollPane = new JScrollPane(content);
+        scrollPane.setPreferredSize(new Dimension(660, 340));
+        showPopupPanel(scrollPane);
+    }
 
     public void showDemographics() {
         int nationNumber = Game.instance.getPlayersInGame().size();
@@ -387,9 +617,22 @@ public class GamePlayController extends ViewController {
 
     private JWindow activePopup;
 
+    /** Re-centers the open popup when the game window is moved/resized/maximized. */
+    private java.awt.event.ComponentAdapter popupFollower;
+    private Window popupOwnerWindow;
+
     private void showPopupPanel(JComponent content) {
         closeActivePopup();
         Window window = SwingUtilities.getWindowAncestor(root);
+
+        // never let the popup be taller/wider than the game window itself -
+        // in a small window the content just scrolls instead of getting cut off
+        if (window != null && content.getPreferredSize() != null) {
+            Dimension pref = content.getPreferredSize();
+            content.setPreferredSize(new Dimension(
+                    Math.min(pref.width, window.getWidth() - 80),
+                    Math.min(pref.height, window.getHeight() - 140)));
+        }
 
         JPanel wrapper = new JPanel(new BorderLayout());
         wrapper.setBackground(new Color(0x212121));
@@ -416,10 +659,63 @@ public class GamePlayController extends ViewController {
             activePopup.setLocation(window.getX() + (window.getWidth() - activePopup.getWidth()) / 2,
                     window.getY() + (window.getHeight() - activePopup.getHeight()) / 2);
         }
+
+        // drag anywhere on the popup's dark background to move it around
+        MouseAdapter dragger = new MouseAdapter() {
+            private Point grabOffset;
+
+            @Override
+            public void mousePressed(MouseEvent e) {
+                grabOffset = e.getLocationOnScreen();
+            }
+
+            @Override
+            public void mouseDragged(MouseEvent e) {
+                if (grabOffset == null || activePopup == null) return;
+                Point now = e.getLocationOnScreen();
+                Point loc = activePopup.getLocation();
+                activePopup.setLocation(loc.x + now.x - grabOffset.x, loc.y + now.y - grabOffset.y);
+                grabOffset = now;
+            }
+        };
+        wrapper.addMouseListener(dragger);
+        wrapper.addMouseMotionListener(dragger);
+        top.addMouseListener(dragger);
+        top.addMouseMotionListener(dragger);
+
+        // maximizing/resizing the game window re-centers the popup so it never
+        // gets stranded off to one side or stuck outside the visible area
+        if (window != null) {
+            popupOwnerWindow = window;
+            popupFollower = new java.awt.event.ComponentAdapter() {
+                @Override
+                public void componentResized(java.awt.event.ComponentEvent e) {
+                    recenterPopup(window);
+                }
+
+                @Override
+                public void componentMoved(java.awt.event.ComponentEvent e) {
+                    recenterPopup(window);
+                }
+            };
+            window.addComponentListener(popupFollower);
+        }
+
         activePopup.setVisible(true);
     }
 
+    private void recenterPopup(Window window) {
+        if (activePopup == null || window == null) return;
+        activePopup.setLocation(window.getX() + (window.getWidth() - activePopup.getWidth()) / 2,
+                window.getY() + (window.getHeight() - activePopup.getHeight()) / 2);
+    }
+
     private void closeActivePopup() {
+        if (popupOwnerWindow != null && popupFollower != null) {
+            popupOwnerWindow.removeComponentListener(popupFollower);
+            popupFollower = null;
+            popupOwnerWindow = null;
+        }
         if (activePopup != null) {
             activePopup.dispose();
             activePopup = null;
@@ -630,6 +926,26 @@ public class GamePlayController extends ViewController {
                     showPopUp(SwingUtilities.getWindowAncestor(root), message);
                 });
                 break;
+            case DEMOLISH: {
+                String blocked = WorkerController.checkCanDemolish();
+                actionButton.setEnabled(blocked == null);
+                if (blocked != null) actionButton.setToolTipText(blocked);
+                actionButton.addActionListener(e -> {
+                    Land target = WorkerController.findDemolishTarget();
+                    String buildingName = (target != null && target.getImprovement() != null)
+                            ? target.getImprovement().getImprovementType().name : "building";
+                    int confirm = JOptionPane.showConfirmDialog(root,
+                            "Demolish the " + buildingName + "?\nBuild costs are NOT refunded and stationed workers are evicted.",
+                            "Demolish building", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+                    if (confirm != JOptionPane.YES_OPTION) return;
+                    String message = WorkerController.demolishImprovement();
+                    showPopUp(SwingUtilities.getWindowAncestor(root), message);
+                    updateWholeMap();
+                    updateHud();
+                    if (GameController.getSelectedCivilizedUnit() == unit) showSelectedCivilizedUnitInfo();
+                });
+                break;
+            }
             default:
                 break;
         }
@@ -649,16 +965,115 @@ public class GamePlayController extends ViewController {
         content.setBorder(BorderFactory.createEmptyBorder(20, 20, 20, 20));
         content.setPreferredSize(new Dimension(480, 500));
 
-        JLabel header = new JLabel("Town Hall - Upgrade Tree");
+        JLabel header = new JLabel(townHall == null ? "Town Hall"
+                : townHall.getLevelName() + " (Level " + townHall.getLevel() + ")");
         header.setFont(new Font("SansSerif", Font.BOLD, 16));
         header.setForeground(new Color(0xf0c060));
         content.add(header);
+        if (townHall != null) {
+            JLabel hpLabel = new JLabel("HP " + townHall.getHp() + "/" + townHall.getMaxHp());
+            hpLabel.setForeground(townHall.getHp() < townHall.getMaxHp() / 2 ? Color.ORANGE : new Color(0x7ecf5a));
+            content.add(hpLabel);
+        }
 
         if (townHall == null) {
             JLabel noTh = new JLabel("No Town Hall placed yet.");
             noTh.setForeground(Color.WHITE);
             content.add(noTh);
         } else {
+            // ── Phase 2: production queue status + cancel ────────────────────
+            JLabel queueHeader = new JLabel("Production Queue");
+            queueHeader.setFont(new Font("SansSerif", Font.BOLD, 13));
+            queueHeader.setForeground(new Color(0xaaaaaa));
+            queueHeader.setBorder(BorderFactory.createEmptyBorder(10, 0, 4, 0));
+            content.add(queueHeader);
+
+            if (!townHall.hasQueuedProduction()) {
+                JLabel empty = new JLabel("Queue is empty.");
+                empty.setForeground(Color.WHITE);
+                content.add(empty);
+            } else {
+                int idx = 0;
+                for (ProductionOrder order : townHall.getProductionQueue()) {
+                    JPanel row = new JPanel(new BorderLayout(10, 0));
+                    row.setBackground(new Color(0x2a2a2a));
+                    row.setBorder(BorderFactory.createEmptyBorder(6, 10, 6, 10));
+                    row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 40));
+
+                    JLabel orderLabel = new JLabel((idx == 0 ? "▶ " : (idx + 1) + ". ")
+                            + order.getDisplayName() + "  (" + order.getTurnsLeft() + " turns left)");
+                    orderLabel.setForeground(idx == 0 ? new Color(0x7ecf5a) : Color.WHITE);
+                    row.add(orderLabel, BorderLayout.CENTER);
+
+                    if (idx == 0) {
+                        JButton cancelBtn = new JButton("Cancel");
+                        cancelBtn.setBackground(new Color(0x7a2b2b));
+                        cancelBtn.setForeground(Color.WHITE);
+                        cancelBtn.setToolTipText("Cancels this order. Spent resources are NOT refunded!");
+                        cancelBtn.addActionListener(e -> {
+                            int confirm = JOptionPane.showConfirmDialog(root,
+                                    "Cancel " + order.getDisplayName() + "?\nSpent resources will NOT be refunded.",
+                                    "Cancel production", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+                            if (confirm != JOptionPane.YES_OPTION) return;
+                            String msg = TownHallController.cancelCurrentProduction();
+                            showPopUp(SwingUtilities.getWindowAncestor(root), msg);
+                            updateHud();
+                            closeActivePopup();
+                            showTownHallPanel();
+                        });
+                        row.add(cancelBtn, BorderLayout.EAST);
+                    }
+                    content.add(row);
+                    idx++;
+                }
+            }
+
+            // ── Phase 2: town hall upgrade ───────────────────────────────────
+            if (townHall.getLevel() < TownHall.MAX_LEVEL) {
+                int target = townHall.getLevel() + 1;
+                int upWood  = (target == 2) ? TownHall.L2_WOOD  : TownHall.L3_WOOD;
+                int upStone = (target == 2) ? TownHall.L2_STONE : TownHall.L3_STONE;
+                int upIron  = (target == 2) ? TownHall.L2_IRON  : TownHall.L3_IRON;
+                int upTurns = (target == 2) ? TownHall.L2_TURNS : TownHall.L3_TURNS;
+
+                JPanel row = new JPanel(new BorderLayout(10, 0));
+                row.setBackground(new Color(0x2a2a2a));
+                row.setBorder(BorderFactory.createEmptyBorder(6, 10, 6, 10));
+                row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 40));
+
+                JLabel upLabel = new JLabel("Upgrade to " + (target == 2 ? "Settlement" : "Capital"));
+                upLabel.setForeground(Color.WHITE);
+                JLabel upCost = new JLabel((upWood > 0 ? "Wood:" + upWood + " " : "")
+                        + (upStone > 0 ? "Stone:" + upStone + " " : "")
+                        + (upIron > 0 ? "Iron:" + upIron + " " : "") + "| " + upTurns + " turns");
+                upCost.setForeground(new Color(0xaaaaaa));
+
+                boolean upAffordable = nation.canAfford(0, upWood, upStone, upIron);
+                boolean upQueued = townHall.isUpgradeQueued();
+                JButton upBtn = new JButton(upQueued ? "In Progress"
+                        : townHall.isBusy() ? "TH Busy" : upAffordable ? "Upgrade" : "Can't Afford");
+                upBtn.setEnabled(!townHall.isBusy() && upAffordable);
+                upBtn.setBackground(upQueued ? new Color(0x444444) : new Color(0x1a5276));
+                upBtn.setForeground(Color.WHITE);
+                upBtn.addActionListener(e -> {
+                    String msg = TownHallController.upgradeTownHall();
+                    showPopUp(SwingUtilities.getWindowAncestor(root), msg);
+                    updateHud();
+                    closeActivePopup();
+                    showTownHallPanel();
+                });
+
+                JPanel labels = new JPanel(new FlowLayout(FlowLayout.LEFT));
+                labels.setOpaque(false);
+                labels.add(upLabel);
+                labels.add(upCost);
+                row.add(labels, BorderLayout.CENTER);
+                row.add(upBtn, BorderLayout.EAST);
+                content.add(row);
+            }
+
+            content.add(new JSeparator());
+
             JLabel techHeader = new JLabel("Research");
             techHeader.setFont(new Font("SansSerif", Font.BOLD, 13));
             techHeader.setForeground(new Color(0xaaaaaa));
@@ -681,14 +1096,22 @@ public class GamePlayController extends ViewController {
                 costLabel.setForeground(new Color(0xaaaaaa));
 
                 boolean affordable = nation.canAfford(0, tech.woodCost, tech.stoneCost, tech.ironCost);
-                boolean researchable = !done && available && affordable;
+                boolean queued = townHall.isAlreadyQueued(tech);
+                boolean levelOk = townHall.getLevel() >= tech.requiredTownHallLevel;
+                boolean researchable = !done && !queued && available && affordable && levelOk && !townHall.isBusy();
 
-                JButton btn = new JButton(done ? "Done" : !available ? "Locked" : !affordable ? "Can't Afford" : "Research");
+                JButton btn = new JButton(done ? "Done" : queued ? "In Progress"
+                        : !available ? "Locked" : !levelOk ? "TH Lv." + tech.requiredTownHallLevel
+                        : townHall.isBusy() ? "TH Busy"
+                        : !affordable ? "Can't Afford" : "Research");
                 btn.setEnabled(researchable);
                 btn.setBackground(done ? new Color(0x2d6a2d) : researchable ? new Color(0x1a5276) : new Color(0x444444));
                 btn.setForeground(Color.WHITE);
                 if (!done && available && !affordable) {
                     btn.setToolTipText("Not enough resources: need " + costString(tech).trim());
+                }
+                if (!done && available && !levelOk) {
+                    btn.setToolTipText(tech.name + " needs Town Hall level " + tech.requiredTownHallLevel);
                 }
 
                 btn.addActionListener(e -> {
@@ -728,10 +1151,11 @@ public class GamePlayController extends ViewController {
                 JLabel costLabel = new JLabel("Food: " + type.productionCostFood + "  |  " + type.turnsToTrain + " turns");
                 costLabel.setForeground(new Color(0xaaaaaa));
 
-                JButton btn = new JButton("Train");
                 boolean capFull = !nation.canTrainUnit();
-                btn.setEnabled(!capFull && nation.getFood().getBalance() >= type.productionCostFood);
-                btn.setBackground(new Color(0x5d4037));
+                JButton btn = new JButton(capFull ? "At Cap" : townHall.isBusy() ? "TH Busy" : "Train");
+                btn.setEnabled(!capFull && !townHall.isBusy()
+                        && nation.getFood().getBalance() >= type.productionCostFood);
+                btn.setBackground(capFull ? new Color(0x444444) : new Color(0x5d4037));
                 btn.setForeground(Color.WHITE);
 
                 btn.addActionListener(e -> {
@@ -753,7 +1177,9 @@ public class GamePlayController extends ViewController {
         }
 
         JScrollPane scrollPane = new JScrollPane(content);
-        scrollPane.setPreferredSize(new Dimension(500, 550));
+        // tall enough that all 4 Train rows fit without scrolling on a maximized
+        // window; showPopupPanel clamps this down again on small windows
+        scrollPane.setPreferredSize(new Dimension(500, 780));
         showPopupPanel(scrollPane);
     }
 
@@ -829,6 +1255,16 @@ public class GamePlayController extends ViewController {
         unitCapInfo.setText(nation.getUnitCount() + "/" + nation.getUnitCap());
         unitCapInfo.setToolTipText(unitBreakdownText(nation));
 
+        // phase 2: happiness value + current tier
+        int happiness = nation.getHappiness();
+        String tier = happiness >= 3 ? " GOLDEN AGE" : happiness <= -5 ? " RIOT!" : happiness <= -3 ? " STRIKE!" : "";
+        happinessInfo.setText((happiness > 0 ? "+" : "") + happiness + tier);
+        happinessInfo.setForeground(happiness >= 3 ? new Color(0xf0c060)
+                : happiness <= -5 ? Color.RED
+                : happiness <= -3 ? Color.ORANGE : new Color(0x7ecf5a));
+        happinessInfo.setToolTipText("<html>-1 per Town, -1 at unit cap, +2 per Monument, +1 with a unit garrisoned in the Town Hall.<br>"
+                + "&ge;+3: Golden Age (+10% production) | -3..-4: strike (each worker -1) | &le;-5: riot (also -1 AP for all units)</html>");
+
         boolean starving = nation.isInStarvation();
         starvationLabel.setVisible(starving);
 
@@ -852,16 +1288,26 @@ public class GamePlayController extends ViewController {
         turn.setText("Turn " + Game.instance.getTurn());
         yearLabel.setText("AD " + Game.instance.getTurn() * 50);
 
+        // phase 2: current season, colored, with its effect as tooltip
+        Season season = Season.forTurn(Game.instance.getTurn());
+        seasonLabel.setText(season.name);
+        switch (season) {
+            case SPRING: seasonLabel.setForeground(new Color(0x7ecf5a)); break;
+            case SUMMER: seasonLabel.setForeground(new Color(0xf7e463)); break;
+            case AUTUMN: seasonLabel.setForeground(new Color(0xe18c28)); break;
+            case WINTER: seasonLabel.setForeground(new Color(0xbfe3ff)); break;
+        }
+        seasonLabel.setToolTipText("Seasons last 10 turns each. " + season.name + ": " + season.effectText());
+
         updateProductionPanel(nation);
         updateResearchPanel(nation);
     }
 
     /**
-     * Research in this game is an instant, single-turn action gated on resources
-     * (see TownHall.researchTechnology) rather than a multi-turn queue, so there's no
-     * "turns remaining" to show here - instead this surfaces the next unresearched,
-     * available technology so the player doesn't have to open the Town Hall panel just
-     * to see whether anything new is researchable.
+     * Surfaces the next unresearched, available technology so the player doesn't have
+     * to open the Town Hall panel just to see whether anything new is researchable.
+     * (Research itself goes through the Town Hall production queue and takes N turns;
+     * in-progress research shows up in the production panel.)
      */
     private void updateResearchPanel(Nation nation) {
         TechnologyType next = null;
@@ -909,11 +1355,12 @@ public class GamePlayController extends ViewController {
     private void updateProductionPanel(Nation nation) {
         TownHall th = nation.getTownHall();
         if (th != null && th.hasQueuedProduction()) {
-            CivilizedUnitType current = th.getCurrentProduction();
-            int turnsLeft = th.getTurnsLeftForCurrent();
-            productionUnitName.setText(current.name);
+            ProductionOrder current = th.getCurrentProduction();
+            int turnsLeft = current.getTurnsLeft();
+            int queued = th.getProductionQueue().size();
+            productionUnitName.setText(current.getDisplayName() + (queued > 1 ? " (+" + (queued - 1) + " queued)" : ""));
             productionTurnsLeft.setText(turnsLeft + " turn" + (turnsLeft == 1 ? "" : "s") + " left");
-            double progress = 1.0 - ((double) turnsLeft / current.turnsToTrain);
+            double progress = 1.0 - ((double) turnsLeft / current.getTotalTurns());
             productionProgress.setValue((int) (Math.max(0, Math.min(1, progress)) * 100));
         } else {
             productionUnitName.setText("-");
@@ -986,6 +1433,8 @@ public class GamePlayController extends ViewController {
             mapPane.remove(marker);
             mapPane.repaint();
             updateWholeMap();
+            // moving on/off the Town Hall hex changes the garrison happiness bonus
+            updateHud();
             unitMovement.setText("AP: " + unit.getCurrentAp() + "/" + unit.getMaxAp());
             // Reopen the unit popup so the Move button's enabled-state reflects the AP
             // actually spent, instead of staying stuck at what it was when the popup
@@ -1015,6 +1464,7 @@ public class GamePlayController extends ViewController {
             mapPane.remove(marker);
             mapPane.repaint();
             updateWholeMap();
+            updateHud();
             unitMovement.setText("AP: " + unit.getCurrentAp() + "/" + unit.getMaxAp());
             String blockerName = "another unit";
             if (blockedHex != null) {
@@ -1061,6 +1511,8 @@ public class GamePlayController extends ViewController {
         improvements.setBackground(new Color(0x212121));
 
         for (ImprovementType improvementType : ImprovementType.values()) {
+            // trading posts are neutral pre-placed structures, never player-buildable
+            if (improvementType == ImprovementType.TRADING_POST) continue;
             JLabel nameLabel = new JLabel(improvementType.name);
             String costTip = "Wood:" + improvementType.buildCostWood +
                     " Stone:" + improvementType.buildCostStone +
@@ -1125,7 +1577,16 @@ public class GamePlayController extends ViewController {
         }
 
         String message = GameController.endTurn();
-        showPopUp(SwingUtilities.getWindowAncestor(root), message);
+
+        // phase 2: show everything that happened during turn processing as one report
+        if (GameController.turnNotifications.isEmpty()) {
+            showPopUp(SwingUtilities.getWindowAncestor(root), message);
+        } else {
+            StringBuilder report = new StringBuilder("<html><b>" + message + "</b>");
+            for (String n : GameController.turnNotifications) report.append("<br>• ").append(n);
+            report.append("</html>");
+            showPopUp(SwingUtilities.getWindowAncestor(root), report.toString());
+        }
 
         hideUnitPopup();
         updateWholeMap();
