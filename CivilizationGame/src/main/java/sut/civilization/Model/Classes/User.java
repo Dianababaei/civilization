@@ -6,7 +6,7 @@ import java.util.ArrayList;
 import java.util.Date;
 import java.util.Objects;
 
-public class User {
+public class User implements java.io.Serializable {
     private String username;
     private String password;
     private String nickname;

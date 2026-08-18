@@ -41,6 +41,8 @@ public class Phase2Driver {
         testBazaar();
         testTradingPost();
         testDemolition();
+        // must run LAST: loading swaps out the whole Game object the other tests hold
+        testSaveLoad();
 
         System.out.println("\n=== SUMMARY: " + pass + " passed, " + fail + " failed ===");
         if (!failLabels.isEmpty()) {
@@ -53,6 +55,8 @@ public class Phase2Driver {
         // random 5%-per-turn quakes would make these tests flaky - we only test
         // earthquakes via the direct trigger
         DisasterController.randomDisastersEnabled = false;
+        // keep test saves/autosaves away from the player's real saves/ folder
+        SaveController.saveDirectory = "target/test-saves";
         user = new User("player", "", "Player");
         Game.instance.setLoggedInUser(user);
         Game.instance.getPlayersInGame().clear();
@@ -272,6 +276,60 @@ public class Phase2Driver {
         nation.removeUnit(worker);
         DisasterController.lastQuakeArea = null;
         DisasterController.lastQuakeCenter = null;
+    }
+
+    // ── 99. save/load (P2-63..67) - runs last, load replaces the game object ──
+    static void testSaveLoad() {
+        info("--- save/load ---");
+
+        int foodBefore = nation.getFood().getBalance();
+        int turnBefore = Game.instance.getTurn();
+        int unitsBefore = nation.getUnits().size();
+
+        String saveMsg = SaveController.saveGame("slot1", "driver-test");
+        check("manual save to slot1 works", saveMsg.startsWith("Saved"));
+        check("no temp file left behind (atomic write)",
+                !new java.io.File(SaveController.saveDirectory, "slot1.tmp").exists());
+
+        SaveController.SaveData meta = SaveController.peek("slot1");
+        check("slot metadata carries version, name, turn and season",
+                meta != null && meta.version == SaveController.SAVE_VERSION
+                        && "driver-test".equals(meta.name) && meta.turn == turnBefore && meta.season != null);
+
+        // wreck the live state, then load the save back
+        nation.getFood().add(-5);
+        Game.instance.setTurn(turnBefore + 7);
+        String loadMsg = SaveController.loadGame("slot1");
+        check("load restores the save", loadMsg.startsWith("Loaded"));
+
+        // the loaded game is a fresh object graph - re-grab everything
+        user = Game.instance.getPlayersInGame().get(0);
+        nation = user.getNation();
+        check("turn restored", Game.instance.getTurn() == turnBefore);
+        check("food balance restored", nation.getFood().getBalance() == foodBefore);
+        check("unit count restored", nation.getUnits().size() == unitsBefore);
+        check("town hall restored with its map tile", th() != null && th().getMainLand() != null);
+
+        // autosave ran at the end of every nextGameTurn in the earlier tests
+        check("autosave file exists after played turns",
+                new java.io.File(SaveController.saveDirectory, "autosave.sav").exists());
+
+        // a save from a wrong version must be refused with a clear error
+        try {
+            SaveController.SaveData bad = new SaveController.SaveData();
+            bad.version = 99;
+            bad.name = "future";
+            bad.turn = 1;
+            bad.game = Game.instance;
+            try (java.io.ObjectOutputStream out = new java.io.ObjectOutputStream(
+                    new java.io.FileOutputStream(new java.io.File(SaveController.saveDirectory, "slot3.sav")))) {
+                out.writeObject(bad);
+            }
+        } catch (Exception e) { /* checked below */ }
+        check("incompatible save version refused", SaveController.loadGame("slot3").contains("version"));
+
+        new java.io.File(SaveController.saveDirectory, "slot2.sav").delete();
+        check("empty slot refused politely", SaveController.loadGame("slot2").contains("empty"));
     }
 
     // ── 0. seasons: 10-turn cycle + winter movement penalty ──────────────────

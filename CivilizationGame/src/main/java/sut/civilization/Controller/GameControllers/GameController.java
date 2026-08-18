@@ -174,6 +174,12 @@ public class GameController extends Controller {
         updateFogOfWar();
 
         LandController.updateDistances();
+
+        // phase 2 save/load: autosave at the END of the turn, after every bit of
+        // processing above (P2-64). A failure never kills the game - the previous
+        // autosave file survives thanks to the atomic write
+        String autosaveProblem = SaveController.autosave();
+        if (autosaveProblem != null) notifyTurn(autosaveProblem);
     }
 
     // ── step 11: building upkeep + destroy after 3 missed turns ───────────────

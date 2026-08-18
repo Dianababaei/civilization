@@ -2,7 +2,7 @@ package sut.civilization.Model.Classes;
 
 import sut.civilization.Model.ModulEnums.ResourceType;
 
-public class Resource {
+public class Resource implements java.io.Serializable {
     /** Remaining extractable quantity of this hex's deposit; production stops at 0. */
     protected int balance;
 

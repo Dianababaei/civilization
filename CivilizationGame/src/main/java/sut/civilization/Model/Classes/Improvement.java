@@ -4,7 +4,7 @@ import sut.civilization.Model.ModulEnums.ImprovementType;
 
 import java.util.ArrayList;
 
-public class Improvement {
+public class Improvement implements java.io.Serializable {
 
     private ImprovementType improvementType;
     private boolean isBroken = false;

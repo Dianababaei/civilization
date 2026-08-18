@@ -7,12 +7,14 @@ import java.awt.CardLayout;
 import java.util.ArrayList;
 
 
-public class Game {
+public class Game implements java.io.Serializable {
     public transient static Game instance = new Game();
 
     public Land[][] map;
-    public int[][] dist = new int[225][225];
-    public String[][] path = new String[225][225];
+    // transient: the distance/path cache is huge and fully recomputable, so save
+    // files skip it and SaveController rebuilds it right after a load
+    public transient int[][] dist = new int[225][225];
+    public transient String[][] path = new String[225][225];
     private ArrayList<User> users = new ArrayList<>();
     private transient JFrame mainWindow;
     private transient CardLayout cardLayout;
@@ -39,6 +41,15 @@ public class Game {
         this.cardLayout = cardLayout;
         this.screenContainer = screenContainer;
         this.sceneFactory = sceneFactory;
+    }
+
+    // phase 2 save/load: a deserialized Game has null window fields (transient), so it
+    // borrows them from the instance that was alive before the load replaced it
+    public void adoptWindowFrom(Game old) {
+        this.mainWindow = old.mainWindow;
+        this.cardLayout = old.cardLayout;
+        this.screenContainer = old.screenContainer;
+        this.sceneFactory = old.sceneFactory;
     }
 
     public int getSubTurn() {

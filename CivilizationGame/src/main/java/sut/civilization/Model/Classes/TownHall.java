@@ -6,7 +6,7 @@ import sut.civilization.Model.ModulEnums.TechnologyType;
 import java.util.ArrayDeque;
 import java.util.Deque;
 
-public class TownHall {
+public class TownHall implements java.io.Serializable {
 
     private static final int SAFEGUARD_FOOD_PER_TURN = 1;
     private static final int SAFEGUARD_WOOD_PER_TURN = 1;

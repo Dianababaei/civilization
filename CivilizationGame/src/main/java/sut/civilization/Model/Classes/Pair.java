@@ -4,7 +4,7 @@ import sut.civilization.Enums.Consts;
 
 import java.util.Objects;
 
-public class Pair <firstClass,secondClass>{
+public class Pair <firstClass,secondClass> implements java.io.Serializable {
     public firstClass x;
     public secondClass y;
 

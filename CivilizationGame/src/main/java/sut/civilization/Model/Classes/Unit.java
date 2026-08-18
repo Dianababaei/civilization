@@ -2,7 +2,7 @@ package sut.civilization.Model.Classes;
 
 import sut.civilization.Model.ModulEnums.UnitStatus;
 
-public class Unit {
+public class Unit implements java.io.Serializable {
     protected Nation ownerNation;
     protected String name;
     protected Pair<Integer, Integer> location;

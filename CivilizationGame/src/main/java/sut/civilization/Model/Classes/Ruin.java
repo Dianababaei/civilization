@@ -2,7 +2,7 @@ package sut.civilization.Model.Classes;
 
 import java.util.Random;
 
-public class Ruin {
+public class Ruin implements java.io.Serializable {
     private boolean retrieved;
     private int goldAmount;
 

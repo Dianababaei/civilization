@@ -5,7 +5,7 @@ import sut.civilization.Model.ModulEnums.LandType;
 
 import java.util.ArrayList;
 
-public class Land {
+public class Land implements java.io.Serializable {
 
     protected Improvement improvement;
     protected Ruin ruin;

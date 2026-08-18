@@ -9,7 +9,7 @@ import sut.civilization.Model.ModulEnums.TechnologyType;
  * technology, or upgrading the Town Hall itself. Costs are paid when the
  * order is enqueued; cancelling does NOT refund them (per spec).
  */
-public class ProductionOrder {
+public class ProductionOrder implements java.io.Serializable {
 
     public enum Kind { TRAIN_UNIT, RESEARCH_TECH, UPGRADE_TOWN_HALL }
 

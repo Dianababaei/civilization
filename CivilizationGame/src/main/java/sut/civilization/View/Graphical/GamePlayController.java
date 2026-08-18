@@ -1269,6 +1269,14 @@ public class GamePlayController extends ViewController {
         JButton continueButton = new JButton("Continue");
         continueButton.addActionListener(e -> closeActivePopup());
 
+        // phase 2 save/load: both live in the pause menu too (spec wants load
+        // reachable from the main menu AND from inside the game)
+        JButton saveButton = new JButton("Save Game");
+        saveButton.addActionListener(e -> saveGameDialog());
+
+        JButton loadButton = new JButton("Load Game");
+        loadButton.addActionListener(e -> loadGameDialog());
+
         JButton returnToMainMenu = new JButton("Return To Main Menu");
         returnToMainMenu.addActionListener(e -> {
             closeActivePopup();
@@ -1285,7 +1293,7 @@ public class GamePlayController extends ViewController {
             }
         });
 
-        for (JButton b : new JButton[]{continueButton, returnToMainMenu, exit}) {
+        for (JButton b : new JButton[]{continueButton, saveButton, loadButton, returnToMainMenu, exit}) {
             b.setAlignmentX(Component.CENTER_ALIGNMENT);
             b.setMaximumSize(new Dimension(220, 40));
             menuPanel.add(Box.createVerticalStrut(15));
@@ -1294,6 +1302,38 @@ public class GamePlayController extends ViewController {
 
         GameController.setSelectedCivilizedUnit(null);
         showPopupPanel(menuPanel);
+    }
+
+    private void saveGameDialog() {
+        String[] options = new String[SaveController.SLOTS.length];
+        for (int i = 0; i < options.length; i++) options[i] = SaveController.describeSlot(SaveController.SLOTS[i]);
+        int pick = JOptionPane.showOptionDialog(root, "Choose a save slot (its old content is overwritten):",
+                "Save Game", JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[0]);
+        if (pick < 0) return;
+        String name = JOptionPane.showInputDialog(root, "Name for this save (optional):", "");
+        if (name == null) return; // cancelled
+        showPopUp(SwingUtilities.getWindowAncestor(root), SaveController.saveGame(SaveController.SLOTS[pick], name));
+    }
+
+    private void loadGameDialog() {
+        String[] slots = {SaveController.SLOTS[0], SaveController.SLOTS[1], SaveController.SLOTS[2], SaveController.AUTOSAVE_SLOT};
+        String[] options = new String[slots.length];
+        for (int i = 0; i < slots.length; i++) options[i] = SaveController.describeSlot(slots[i]);
+        int pick = JOptionPane.showOptionDialog(root, "Choose a slot to load:",
+                "Load Game", JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[0]);
+        if (pick < 0) return;
+        int sure = JOptionPane.showConfirmDialog(root,
+                "Loading throws away the current unsaved progress. Continue?",
+                "Load Game", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+        if (sure != JOptionPane.YES_OPTION) return;
+
+        String message = SaveController.loadGame(slots[pick]);
+        if (message.startsWith("Loaded")) {
+            closeActivePopup();
+            // rebuild the whole game screen on top of the freshly loaded state
+            Game.instance.changeScene(Menus.GAME_MENU);
+        }
+        JOptionPane.showMessageDialog(root, message);
     }
 
     public void updateWholeMap() {

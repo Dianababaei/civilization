@@ -2,7 +2,7 @@ package sut.civilization.Model.Classes;
 
 import sut.civilization.Model.ModulEnums.LandFeatureType;
 
-public class LandFeature {
+public class LandFeature implements java.io.Serializable {
     protected LandFeatureType landFeatureType;
 
     public LandFeature(LandFeatureType landFeatureType) {

@@ -6,7 +6,7 @@ import sut.civilization.Model.ModulEnums.ResourceType;
  * Tracks one resource's stored amount, storage cap, and net production rate per turn.
  * Called "Currency" to preserve existing references throughout the codebase.
  */
-public class Currency {
+public class Currency implements java.io.Serializable {
     private int balance;       // current stored amount
     private int capacity;      // max storable amount
     private int netRate;       // net production per turn (production - upkeep); can be negative

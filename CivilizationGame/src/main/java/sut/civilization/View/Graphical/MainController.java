@@ -3,6 +3,7 @@ package sut.civilization.View.Graphical;
 import sut.civilization.Controller.GameControllers.CityController;
 import sut.civilization.Controller.GameControllers.GameController;
 import sut.civilization.Controller.GameControllers.LandController;
+import sut.civilization.Controller.GameControllers.SaveController;
 import sut.civilization.Controller.GameControllers.TechnologyController;
 import sut.civilization.Enums.Menus;
 import sut.civilization.Model.Classes.Game;
@@ -47,10 +48,11 @@ public class MainController extends ViewController {
         centerPanel.setLayout(new BoxLayout(centerPanel, BoxLayout.Y_AXIS));
 
         JButton startButton = styledButton("Start");
+        JButton loadButton = styledButton("Load Game");
         JButton settingsButton = styledButton("Settings");
         JButton exitButton = styledButton("Exit");
 
-        for (JButton b : new JButton[]{startButton, settingsButton, exitButton}) {
+        for (JButton b : new JButton[]{startButton, loadButton, settingsButton, exitButton}) {
             b.setAlignmentX(Component.CENTER_ALIGNMENT);
             b.setMaximumSize(new Dimension(220, 45));
             centerPanel.add(Box.createVerticalStrut(15));
@@ -83,6 +85,7 @@ public class MainController extends ViewController {
         root.add(wrapper, BorderLayout.CENTER);
 
         startButton.addActionListener(e -> onStart());
+        loadButton.addActionListener(e -> onLoad(root));
         settingsButton.addActionListener(e -> onSettings());
         exitButton.addActionListener(e -> onExit(root));
 
@@ -156,6 +159,22 @@ public class MainController extends ViewController {
                         "Invalid value", JOptionPane.WARNING_MESSAGE);
             }
         }
+    }
+
+    // phase 2 save/load: pick a slot (3 manual + autosave), load it, jump into the game
+    private void onLoad(Component parent) {
+        String[] slots = {SaveController.SLOTS[0], SaveController.SLOTS[1], SaveController.SLOTS[2], SaveController.AUTOSAVE_SLOT};
+        String[] options = new String[slots.length];
+        for (int i = 0; i < slots.length; i++) options[i] = SaveController.describeSlot(slots[i]);
+        int pick = JOptionPane.showOptionDialog(parent, "Choose a slot to load:",
+                "Load Game", JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[0]);
+        if (pick < 0) return;
+
+        String message = SaveController.loadGame(slots[pick]);
+        if (message.startsWith("Loaded")) {
+            Game.instance.changeScene(Menus.GAME_MENU);
+        }
+        JOptionPane.showMessageDialog(parent, message);
     }
 
     private void onSettings() {

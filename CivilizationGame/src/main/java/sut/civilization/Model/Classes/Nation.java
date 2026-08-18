@@ -6,7 +6,7 @@ import sut.civilization.Model.ModulEnums.TechnologyType;
 import java.util.ArrayList;
 import java.util.HashMap;
 
-public class Nation {
+public class Nation implements java.io.Serializable {
 
     // ── Resources ─────────────────────────────────────────────────────────────
     // these starting amounts are not fixed by the project spec, we just picked
