@@ -57,6 +57,10 @@ public class LandGraphical extends JComponent {
     /** For each of the 6 edges (edge i = LOCAL_HEX vertex i to vertex i+1), whether that
      *  side faces a hex NOT owned by the current nation and therefore needs a border drawn. */
     private final boolean[] frontierEdge = new boolean[6];
+    /** Phase 2 roads: for each of the 6 edges, whether the neighbor behind it also has a road. */
+    private final boolean[] roadEdge = new boolean[6];
+    /** Phase 2 disasters: hexes currently flashing because of an earthquake animation. */
+    public static final java.util.Set<Pair<Integer, Integer>> quakeFlashTiles = new java.util.HashSet<>();
 
     private String tooltipText = "";
 
@@ -169,6 +173,22 @@ public class LandGraphical extends JComponent {
             landInfo.append("\nVOLCANO - the only mountains that can erupt");
         }
 
+        // phase 2: mountain ranges block everything
+        if (land.getLandType() == sut.civilization.Model.ModulEnums.LandType.MOUNTAIN_RANGE) {
+            landInfo.append("\nIMPASSABLE - units cannot cross and nothing can be built here");
+        }
+
+        // phase 2 roads: remember which neighbors also have a road so paint can
+        // connect the road strokes across hex borders
+        if (land.hasRoad()) {
+            landInfo.append("\nRoad - moving between two road hexes costs 1 AP");
+            var roadNeighbors = sut.civilization.Controller.GameControllers.LandController.getAllNeighborsIndexes(coordinate);
+            for (int i = 0; i < 6; i++) {
+                Pair<Integer, Integer> nb = roadNeighbors.get(i);
+                roadEdge[i] = Pair.isValid(nb) && Game.instance.map[nb.x][nb.y].hasRoad();
+            }
+        }
+
         if (land.getLandFeature() != null) {
             landFeatureImage = loadImage("/sut/civilization/Images/tiles/" + land.getLandFeature().getLandFeatureType().name + ".png");
             landInfo.append("\nFeature: ").append(land.getLandFeature().getLandFeatureType().name);
@@ -194,8 +214,13 @@ public class LandGraphical extends JComponent {
         }
 
         if (land.getCivilizedUnit() != null) {
-            String civName = ((CivilizedUnit) land.getCivilizedUnit()).getCivilizedUnitType().name;
+            CivilizedUnit occupant = land.getCivilizedUnit();
+            String civName = occupant.getCivilizedUnitType().name;
             civilizedUnitImage = loadImage("/sut/civilization/Images/units/" + civName + ".png");
+            // phase 2: HP visible right on the hover tooltip (needed to verify quake damage)
+            landInfo.append("\nUnit: ").append(civName)
+                    .append(" (HP ").append(occupant.getHp()).append("/").append(occupant.getCivilizedUnitType().maxHp)
+                    .append(", AP ").append(occupant.getCurrentAp()).append("/").append(occupant.getMaxAp()).append(")");
         } else civilizedUnitImage = null;
 
         boolean isTownHallTile = false;
@@ -259,7 +284,7 @@ public class LandGraphical extends JComponent {
     /** Translucent overlay for the current season (null = no tint in summer). */
     private static Color seasonTintColor() {
         switch (sut.civilization.Model.ModulEnums.Season.forTurn(Game.instance.getTurn())) {
-            case SPRING: return new Color(110, 220, 110, 22);  // light green
+            case SPRING: return new Color(110, 220, 110, 45);  // light green
             case AUTUMN: return new Color(225, 140, 40, 45);   // orange
             case WINTER: return new Color(220, 235, 255, 85);  // snowy blue-white
             default:     return null;                          // summer - natural colors
@@ -322,6 +347,34 @@ public class LandGraphical extends JComponent {
                 int next = (i + 1) % 6;
                 g2.drawLine(xs[i], ys[i], xs[next], ys[next]);
             }
+            g2.setStroke(oldStroke);
+        }
+
+        // phase 2 roads: brown strokes from the hex center out to every neighboring
+        // road hex, so connected roads read as one continuous path on the map
+        if (land.hasRoad()) {
+            java.awt.Stroke oldStroke = g2.getStroke();
+            int[] xs = LOCAL_HEX.xpoints;
+            int[] ys = LOCAL_HEX.ypoints;
+            boolean connected = false;
+            // dark outline then lighter core, same halo trick as the territory border
+            for (int pass = 0; pass < 2; pass++) {
+                g2.setStroke(new java.awt.BasicStroke(pass == 0 ? 16f : 9f,
+                        java.awt.BasicStroke.CAP_ROUND, java.awt.BasicStroke.JOIN_ROUND));
+                g2.setColor(pass == 0 ? new Color(0x3d2c14) : new Color(0xa8865a));
+                for (int i = 0; i < 6; i++) {
+                    if (!roadEdge[i]) continue;
+                    connected = true;
+                    int next = (i + 1) % 6;
+                    g2.drawLine(cx, cy, (xs[i] + xs[next]) / 2, (ys[i] + ys[next]) / 2);
+                }
+            }
+            // a road hex with no road neighbors yet still gets a visible patch
+            int patch = connected ? 14 : 22;
+            g2.setColor(new Color(0x3d2c14));
+            g2.fillOval(cx - patch / 2 - 2, cy - patch / 2 - 2, patch + 4, patch + 4);
+            g2.setColor(new Color(0xa8865a));
+            g2.fillOval(cx - patch / 2, cy - patch / 2, patch, patch);
             g2.setStroke(oldStroke);
         }
 
@@ -398,6 +451,15 @@ public class LandGraphical extends JComponent {
             g2.clip(LOCAL_HEX);
             g2.drawImage(fogImage, 0, 0, LOCAL_W, LOCAL_H, this);
             g2.setComposite(oldComposite);
+            g2.setClip(oldClip);
+        }
+
+        // phase 2 disasters: the earthquake flash paints ON TOP of fog, so the whole
+        // 19-hex damage area stays visible even where it reaches unexplored tiles
+        if (quakeFlashTiles.contains(coordinate)) {
+            g2.clip(LOCAL_HEX);
+            g2.setColor(new Color(255, 80, 30, 130));
+            g2.fillPolygon(LOCAL_HEX);
             g2.setClip(oldClip);
         }
 

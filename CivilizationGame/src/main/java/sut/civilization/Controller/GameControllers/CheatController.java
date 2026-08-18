@@ -122,7 +122,7 @@ public class CheatController extends GameController {
                 for (int j = 0; j < Consts.MAP_SIZE.amount.y && n.getUnits().size() < cap; j++) {
                     Land tile = Game.instance.map[i][j];
                     if (tile.getCivilizedUnit() != null) continue;
-                    if (tile.getLandType() == LandType.MOUNTAIN) continue;
+                    if (tile.getLandType() == LandType.MOUNTAIN || tile.getLandType() == LandType.MOUNTAIN_RANGE) continue;
                     if (tile.getVisibility() == 0) continue;
                     if (pass == 0 && !n.ownsHex(i, j)) continue;
                     // keep the TH hex empty - a garrisoned unit gives +1 happiness,
@@ -146,6 +146,18 @@ public class CheatController extends GameController {
         int now = n.getHappiness();
         String tier = now >= 3 ? " (GOLDEN AGE)" : now <= -5 ? " (RIOT)" : now <= -3 ? " (STRIKE)" : "";
         return "Happiness " + (delta > 0 ? "+" : "") + delta + " -> now " + now + tier + ".";
+    }
+
+    // fires an earthquake centered on a random hex the player can currently see,
+    // so the demo shake/flash is guaranteed to happen on-screen
+    public static String debugTriggerEarthquake() {
+        java.util.ArrayList<Pair<Integer, Integer>> visible = new java.util.ArrayList<>();
+        for (int i = 0; i < Consts.MAP_SIZE.amount.x; i++)
+            for (int j = 0; j < Consts.MAP_SIZE.amount.y; j++)
+                if (Game.instance.map[i][j].getVisibility() == 2) visible.add(new Pair<>(i, j));
+        if (visible.isEmpty()) return "No visible hex to strike!";
+        Pair<Integer, Integer> center = visible.get(new java.util.Random().nextInt(visible.size()));
+        return DisasterController.triggerEarthquake(center);
     }
 
     // reveals the whole map for the current player (marks tiles as explorer-seen too,

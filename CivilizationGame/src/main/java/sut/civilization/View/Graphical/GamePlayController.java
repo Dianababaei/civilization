@@ -31,6 +31,8 @@ public class GamePlayController extends ViewController {
     public JPanel root;
     private JLayeredPane layeredRoot;
     private JPanel overlayLayer;
+    private JPanel hudPanel;
+    private WeatherOverlay weatherOverlay;
 
     public JLabel foodInfo;
     public JLabel woodInfo;
@@ -101,6 +103,12 @@ public class GamePlayController extends ViewController {
         overlayLayer.setBounds(0, 0, 1366, 768);
         layeredRoot.add(overlayLayer, JLayeredPane.PALETTE_LAYER);
 
+        // phase 2: snow/rain particle layer - above the map but below the HUD/popups.
+        // clicks pass straight through it (see WeatherOverlay.contains)
+        weatherOverlay = new WeatherOverlay();
+        weatherOverlay.setBounds(0, 0, 1366, 768);
+        layeredRoot.add(weatherOverlay, Integer.valueOf(50));
+
         buildHud();
         buildBottomPanels();
         buildZoomControls();
@@ -111,6 +119,9 @@ public class GamePlayController extends ViewController {
                 layeredRoot.setBounds(0, 0, root.getWidth(), root.getHeight());
                 centerWrapper.setBounds(0, 0, root.getWidth(), root.getHeight());
                 overlayLayer.setBounds(0, 0, root.getWidth(), root.getHeight());
+                weatherOverlay.setBounds(0, 0, root.getWidth(), root.getHeight());
+                // keep the HUD stretched across the full window width
+                hudPanel.setBounds(0, 0, root.getWidth(), 46);
                 layeredRoot.revalidate();
                 layeredRoot.repaint();
             }
@@ -144,10 +155,16 @@ public class GamePlayController extends ViewController {
     // ── HUD ───────────────────────────────────────────────────────────────────
 
     private void buildHud() {
+        // two-part bar: info labels flow on the left, buttons pinned on the right.
+        // the old single FlowLayout wrapped once the season/starving labels got long,
+        // which shoved the Debug/Menu buttons onto a clipped second row
+        hudPanel = new JPanel(new BorderLayout());
+        hudPanel.setBackground(new Color(0x22, 0x22, 0x22, 220));
+        hudPanel.setBounds(0, 0, 1366, 46);
+
         JPanel hud = new JPanel();
-        hud.setBackground(new Color(0x22, 0x22, 0x22, 220));
-        hud.setLayout(new FlowLayout(FlowLayout.LEFT, 15, 5));
-        hud.setBounds(0, 0, 1366, 40);
+        hud.setOpaque(false);
+        hud.setLayout(new FlowLayout(FlowLayout.LEFT, 12, 5));
 
         foodInfo = hudLabel();
         woodInfo = hudLabel();
@@ -192,14 +209,18 @@ public class GamePlayController extends ViewController {
         debugBtn.addActionListener(e -> showDebugPanel());
         menuBtn.addActionListener(e -> showMenu());
 
-        hud.add(townHallBtn);
-        hud.add(tradeBtn);
-        hud.add(unitsBtn);
-        hud.add(statsBtn);
-        hud.add(debugBtn);
-        hud.add(menuBtn);
+        JPanel hudButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 5));
+        hudButtons.setOpaque(false);
+        hudButtons.add(townHallBtn);
+        hudButtons.add(tradeBtn);
+        hudButtons.add(unitsBtn);
+        hudButtons.add(statsBtn);
+        hudButtons.add(debugBtn);
+        hudButtons.add(menuBtn);
 
-        overlayLayer.add(hud);
+        hudPanel.add(hud, BorderLayout.CENTER);
+        hudPanel.add(hudButtons, BorderLayout.EAST);
+        overlayLayer.add(hudPanel);
     }
 
     private JLabel hudLabel() {
@@ -390,6 +411,7 @@ public class GamePlayController extends ViewController {
         JButton reveal = new JButton("Reveal map");
         JButton happyUp = new JButton("Happiness +1");
         JButton happyDown = new JButton("Happiness -1");
+        JButton quake = new JButton("Earthquake");
         for (JButton b : new JButton[]{res100, turn1, turn5, fillCap, reveal}) {
             b.setBackground(new Color(0x1a5276));
             b.setForeground(Color.WHITE);
@@ -399,7 +421,7 @@ public class GamePlayController extends ViewController {
         JPanel row2 = new JPanel(new FlowLayout(FlowLayout.LEFT));
         row2.setOpaque(false);
         row2.setMaximumSize(new Dimension(Integer.MAX_VALUE, 44));
-        for (JButton b : new JButton[]{happyUp, happyDown}) {
+        for (JButton b : new JButton[]{happyUp, happyDown, quake}) {
             b.setBackground(new Color(0x1a5276));
             b.setForeground(Color.WHITE);
             row2.add(b);
@@ -440,6 +462,18 @@ public class GamePlayController extends ViewController {
         happyDown.addActionListener(e -> {
             showPopUp(SwingUtilities.getWindowAncestor(root), CheatController.debugAdjustHappiness(-1));
             updateHud();
+        });
+        quake.addActionListener(e -> {
+            String msg = CheatController.debugTriggerEarthquake();
+            closeActivePopup(); // get the debug panel out of the way so the shake is visible
+            updateWholeMap();
+            updateHud();
+            if (DisasterController.lastQuakeArea != null) {
+                playEarthquakeAnimation(DisasterController.lastQuakeArea);
+                DisasterController.lastQuakeArea = null;
+                DisasterController.lastQuakeCenter = null;
+            }
+            showPopUp(SwingUtilities.getWindowAncestor(root), msg);
         });
         content.add(row);
         content.add(row2);
@@ -761,7 +795,7 @@ public class GamePlayController extends ViewController {
 
         JLabel unitMovement = new JLabel("AP: " + civilizedUnit.getCurrentAp() + "/" + civilizedUnit.getMaxAp());
         unitMovement.setForeground(Color.WHITE);
-        JLabel unitHP = new JLabel("Health: " + civilizedUnit.getHp());
+        JLabel unitHP = new JLabel("Health: " + civilizedUnit.getHp() + "/" + civilizedUnitType.maxHp);
         unitHP.setForeground(Color.WHITE);
 
         JPanel infoVBox = new JPanel();
@@ -926,6 +960,19 @@ public class GamePlayController extends ViewController {
                     showPopUp(SwingUtilities.getWindowAncestor(root), message);
                 });
                 break;
+            case BUILD_ROAD: {
+                String roadBlocked = WorkerController.checkCanBuildRoad();
+                actionButton.setEnabled(roadBlocked == null);
+                if (roadBlocked != null) actionButton.setToolTipText(roadBlocked);
+                actionButton.addActionListener(e -> {
+                    String message = WorkerController.buildRoad();
+                    showPopUp(SwingUtilities.getWindowAncestor(root), message);
+                    updateWholeMap();
+                    updateHud();
+                    if (GameController.getSelectedCivilizedUnit() == unit) showSelectedCivilizedUnitInfo();
+                });
+                break;
+            }
             case DEMOLISH: {
                 String blocked = WorkerController.checkCanDemolish();
                 actionButton.setEnabled(blocked == null);
@@ -963,7 +1010,8 @@ public class GamePlayController extends ViewController {
         content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
         content.setBackground(new Color(0x1e1e1e));
         content.setBorder(BorderFactory.createEmptyBorder(20, 20, 20, 20));
-        content.setPreferredSize(new Dimension(480, 500));
+        // no fixed preferred size! with one hard-coded, the scroll pane thought the
+        // content ended at 500px and silently clipped the Archer/Cavalry train rows
 
         JLabel header = new JLabel(townHall == null ? "Town Hall"
                 : townHall.getLevelName() + " (Level " + townHall.getLevel() + ")");
@@ -1146,15 +1194,36 @@ public class GamePlayController extends ViewController {
                 row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 40));
 
                 JLabel nameLabel = new JLabel(type.name);
-                nameLabel.setForeground(Color.WHITE);
+                nameLabel.setForeground(type.isMilitary ? new Color(0xe57373) : Color.WHITE);
+                if (type.isMilitary) {
+                    nameLabel.setToolTipText("HP " + type.maxHp + ", AP " + type.ap
+                            + ", Range " + type.attackRange + ", Attack " + type.attackPower);
+                }
 
-                JLabel costLabel = new JLabel("Food: " + type.productionCostFood + "  |  " + type.turnsToTrain + " turns");
+                JLabel costLabel = new JLabel("Food: " + type.productionCostFood
+                        + (type.productionCostWood > 0 ? "  Wood: " + type.productionCostWood : "")
+                        + "  |  " + type.turnsToTrain + " turns");
                 costLabel.setForeground(new Color(0xaaaaaa));
 
-                boolean capFull = !nation.canTrainUnit();
-                JButton btn = new JButton(capFull ? "At Cap" : townHall.isBusy() ? "TH Busy" : "Train");
-                btn.setEnabled(!capFull && !townHall.isBusy()
-                        && nation.getFood().getBalance() >= type.productionCostFood);
+                // phase 2 military gates: TH level, military stable (cavalry), military cap
+                boolean capFull = !nation.canTrainUnit()
+                        || (type.isMilitary && !nation.canTrainMilitaryUnit());
+                boolean levelOk = townHall.getLevel() >= type.requiredTownHallLevel;
+                boolean stableOk = !type.requiresMilitaryStable
+                        || nation.hasImprovementInTerritory(ImprovementType.MILITARY_STABLE);
+                boolean affordable = nation.getFood().getBalance() >= type.productionCostFood
+                        && nation.getWood().getBalance() >= type.productionCostWood;
+
+                JButton btn = new JButton(!levelOk ? "TH Lv." + type.requiredTownHallLevel
+                        : !stableOk ? "Needs Stable"
+                        : capFull ? "At Cap"
+                        : townHall.isBusy() ? "TH Busy"
+                        : !affordable ? "Can't Afford" : "Train");
+                btn.setEnabled(levelOk && stableOk && !capFull && !townHall.isBusy() && affordable);
+                if (type.isMilitary && capFull) {
+                    btn.setToolTipText("Military cap: " + nation.getMilitaryUnitCount()
+                            + "/" + nation.getMilitaryUnitCap() + " (5 per Town Hall level)");
+                }
                 btn.setBackground(capFull ? new Color(0x444444) : new Color(0x5d4037));
                 btn.setForeground(Color.WHITE);
 
@@ -1177,9 +1246,9 @@ public class GamePlayController extends ViewController {
         }
 
         JScrollPane scrollPane = new JScrollPane(content);
-        // tall enough that all 4 Train rows fit without scrolling on a maximized
-        // window; showPopupPanel clamps this down again on small windows
+        // viewport size only - the content is taller and scrolls inside it
         scrollPane.setPreferredSize(new Dimension(500, 780));
+        scrollPane.getVerticalScrollBar().setUnitIncrement(16);
         showPopupPanel(scrollPane);
     }
 
@@ -1262,7 +1331,9 @@ public class GamePlayController extends ViewController {
         happinessInfo.setForeground(happiness >= 3 ? new Color(0xf0c060)
                 : happiness <= -5 ? Color.RED
                 : happiness <= -3 ? Color.ORANGE : new Color(0x7ecf5a));
-        happinessInfo.setToolTipText("<html>-1 per Town, -1 at unit cap, +2 per Monument, +1 with a unit garrisoned in the Town Hall.<br>"
+        happinessInfo.setToolTipText("<html>-1 per Town, -1 at unit cap, -1 at military cap ("
+                + nation.getMilitaryUnitCount() + "/" + nation.getMilitaryUnitCap()
+                + "), +2 per Monument, +1 with a MILITARY unit garrisoned in the Town Hall.<br>"
                 + "&ge;+3: Golden Age (+10% production) | -3..-4: strike (each worker -1) | &le;-5: riot (also -1 AP for all units)</html>");
 
         boolean starving = nation.isInStarvation();
@@ -1281,7 +1352,8 @@ public class GamePlayController extends ViewController {
         }
         atRiskDetail.append("A building is destroyed (its workers evicted) once it misses 3 upkeep payments in a row. "
                 + "Each building needs 1 Wood/turn while staffed - station fewer Workers or grow your Wood income to save it.</html>");
-        buildingWarningLabel.setText(atRiskBuildings + " building(s) will be destroyed next turn (unpaid Wood upkeep) - hover for details");
+        // keep this short - a long warning used to push the HUD buttons off-screen
+        buildingWarningLabel.setText(atRiskBuildings + " building(s) at risk - hover!");
         buildingWarningLabel.setToolTipText(atRiskBuildings > 0 ? atRiskDetail.toString() : null);
         buildingWarningLabel.setVisible(atRiskBuildings > 0);
 
@@ -1289,14 +1361,17 @@ public class GamePlayController extends ViewController {
         yearLabel.setText("AD " + Game.instance.getTurn() * 50);
 
         // phase 2: current season, colored, with its effect as tooltip
+        // the effect is also written next to the name because Spring/Summer were
+        // hard to tell apart when the only difference was the label color
         Season season = Season.forTurn(Game.instance.getTurn());
-        seasonLabel.setText(season.name);
+        String seasonEffect = "";
         switch (season) {
-            case SPRING: seasonLabel.setForeground(new Color(0x7ecf5a)); break;
-            case SUMMER: seasonLabel.setForeground(new Color(0xf7e463)); break;
-            case AUTUMN: seasonLabel.setForeground(new Color(0xe18c28)); break;
-            case WINTER: seasonLabel.setForeground(new Color(0xbfe3ff)); break;
+            case SPRING: seasonLabel.setForeground(new Color(0x54d654)); seasonEffect = " (farms +1)"; break;
+            case SUMMER: seasonLabel.setForeground(new Color(0xffd21f)); break;
+            case AUTUMN: seasonLabel.setForeground(new Color(0xe1731f)); break;
+            case WINTER: seasonLabel.setForeground(new Color(0xbfe3ff)); seasonEffect = " (farms -1, moves +1 AP)"; break;
         }
+        seasonLabel.setText(season.name + seasonEffect);
         seasonLabel.setToolTipText("Seasons last 10 turns each. " + season.name + ": " + season.effectText());
 
         updateProductionPanel(nation);
@@ -1348,6 +1423,8 @@ public class GamePlayController extends ViewController {
         for (CivilizedUnitType type : CivilizedUnitType.values()) {
             sb.append(type.name).append(": ").append(counts.getOrDefault(type, 0)).append("<br>");
         }
+        sb.append("Military: ").append(nation.getMilitaryUnitCount()).append("/")
+                .append(nation.getMilitaryUnitCap()).append(" (5 per TH level)<br>");
         sb.append("</html>");
         return sb.toString();
     }
@@ -1591,10 +1668,133 @@ public class GamePlayController extends ViewController {
         hideUnitPopup();
         updateWholeMap();
         updateHud();
+
+        // phase 2 disasters: if a quake hit during turn processing, shake the map
+        // and flash the damaged area (an alert alone is not accepted by the spec)
+        if (DisasterController.lastQuakeArea != null) {
+            playEarthquakeAnimation(DisasterController.lastQuakeArea);
+            DisasterController.lastQuakeArea = null;
+            DisasterController.lastQuakeCenter = null;
+        }
+    }
+
+    private Timer quakeShakeTimer;
+    private int quakeShakeBase;
+
+    /** Screen shake + orange flash over the affected hexes for ~1.2s. */
+    private void playEarthquakeAnimation(java.util.List<Pair<Integer, Integer>> area) {
+        JScrollBar hbar = mapScrollPane.getHorizontalScrollBar();
+        // a new quake while the previous one is still shaking: finish the old one
+        // first, otherwise the two flash areas merge into one giant blob
+        if (quakeShakeTimer != null && quakeShakeTimer.isRunning()) {
+            quakeShakeTimer.stop();
+            hbar.setValue(quakeShakeBase);
+            LandGraphical.quakeFlashTiles.clear();
+            updateWholeMap();
+        }
+
+        LandGraphical.quakeFlashTiles.addAll(area);
+        for (Pair<Integer, Integer> hex : area) graphicalMap[hex.x][hex.y].repaint();
+
+        int base = hbar.getValue();
+        quakeShakeBase = base;
+        int[] tick = {0};
+        Timer shake = new Timer(40, null);
+        shake.addActionListener(e -> {
+            tick[0]++;
+            if (tick[0] >= 30) {
+                shake.stop();
+                hbar.setValue(base);
+                LandGraphical.quakeFlashTiles.clear();
+                updateWholeMap();
+            } else {
+                hbar.setValue(base + (tick[0] % 2 == 0 ? 10 : -10));
+            }
+        });
+        quakeShakeTimer = shake;
+        shake.start();
     }
 
     public void hideUnitPopup() {
         GameController.setSelectedCivilizedUnit(null);
         closeActivePopup();
+    }
+
+    // ── Phase 2: weather animations (winter snowfall, autumn rain) ────────────
+    // A transparent layer above the map that animates simple falling particles for
+    // the whole season and stops when the season changes. contains() always says
+    // false so mouse clicks fall straight through to the map tiles underneath.
+    private static class WeatherOverlay extends JPanel {
+        private static class Particle { double x, y, speed, drift; int size; }
+
+        private final java.util.ArrayList<Particle> particles = new java.util.ArrayList<>();
+        private Season activeSeason = null;
+
+        WeatherOverlay() {
+            setOpaque(false);
+            // ~25 fps is plenty for background weather
+            new Timer(40, e -> tick()).start();
+        }
+
+        @Override
+        public boolean contains(int x, int y) { return false; }
+
+        private void tick() {
+            Season season = Season.forTurn(Game.instance.getTurn());
+            boolean active = season == Season.WINTER || season == Season.AUTUMN;
+            if (!active) {
+                if (!particles.isEmpty() || activeSeason != null) {
+                    particles.clear();
+                    activeSeason = null;
+                    repaint();
+                }
+                return;
+            }
+            if (season != activeSeason) { particles.clear(); activeSeason = season; }
+
+            // top up to the target count; new particles start above the top edge
+            int target = season == Season.WINTER ? 90 : 130;
+            while (particles.size() < target) {
+                Particle p = new Particle();
+                p.x = Math.random() * Math.max(1, getWidth());
+                p.y = -Math.random() * Math.max(1, getHeight());
+                if (season == Season.WINTER) {
+                    p.speed = 1 + Math.random() * 1.5;      // slow snow
+                    p.drift = Math.random() - 0.5;          // gentle sideways sway
+                    p.size = 2 + (int) (Math.random() * 3);
+                } else {
+                    p.speed = 8 + Math.random() * 5;        // fast rain
+                    p.drift = -2;                           // storm wind blows it sideways
+                    p.size = 10 + (int) (Math.random() * 8);
+                }
+                particles.add(p);
+            }
+            for (Particle p : particles) {
+                p.y += p.speed;
+                p.x += p.drift;
+                if (p.y > getHeight() || p.x < -20) {
+                    p.y = -10;
+                    p.x = Math.random() * Math.max(1, getWidth());
+                }
+            }
+            repaint();
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            super.paintComponent(g);
+            if (activeSeason == null) return;
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            if (activeSeason == Season.WINTER) {
+                g2.setColor(new Color(255, 255, 255, 200));
+                for (Particle p : particles) g2.fillOval((int) p.x, (int) p.y, p.size, p.size);
+            } else { // autumn rain, drawn as short wind-slanted streaks
+                g2.setColor(new Color(160, 200, 255, 160));
+                g2.setStroke(new BasicStroke(1.6f));
+                for (Particle p : particles) g2.drawLine((int) p.x, (int) p.y, (int) (p.x - 4), (int) (p.y + p.size));
+            }
+            g2.dispose();
+        }
     }
 }
