@@ -23,6 +23,8 @@ public enum UnitActions {
     REMOVE_FEATURE(new ImageIcon(Civilization.class.getResource("/sut/civilization/Images/unitActions/Remove Feature.png")), "Remove Feature"),
     // Phase 2: Builder demolishes a building on its own or a neighboring hex (no refund)
     DEMOLISH(new ImageIcon(Civilization.class.getResource("/sut/civilization/Images/unitActions/Remove Feature.png")), "Demolish Building"),
+    // Phase 2: Builder lays a road on its current hex (road-to-road steps cost 1 AP)
+    BUILD_ROAD(new ImageIcon(Civilization.class.getResource("/sut/civilization/Images/unitActions/Build Improvement.png")), "Build Road"),
     ALERT(new ImageIcon(Civilization.class.getResource("/sut/civilization/Images/unitActions/Alert.png")), "Alert")
     ;
 

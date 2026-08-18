@@ -61,8 +61,19 @@ public class TownHallController {
         if (!nation.canTrainUnit())
             return "Unit cap reached (" + nation.getUnitCap() + "). Build a Town or upgrade the Town Hall!";
 
-        if (nation.getFood().getBalance() < type.productionCostFood)
-            return "Not enough food. Need " + type.productionCostFood + " food!";
+        // phase 2: military units have their own gates
+        if (townHall.getLevel() < type.requiredTownHallLevel)
+            return type.name + " requires Town Hall level " + type.requiredTownHallLevel + "!";
+        if (type.requiresMilitaryStable
+                && !nation.hasImprovementInTerritory(sut.civilization.Model.ModulEnums.ImprovementType.MILITARY_STABLE))
+            return "Cavalry needs a Military Stable in your territory!";
+        if (type.isMilitary && !nation.canTrainMilitaryUnit())
+            return "Military cap reached (" + nation.getMilitaryUnitCap() + "). Upgrade the Town Hall!";
+
+        if (nation.getFood().getBalance() < type.productionCostFood
+                || nation.getWood().getBalance() < type.productionCostWood)
+            return "Not enough resources. Need " + type.productionCostFood + " food"
+                    + (type.productionCostWood > 0 ? " + " + type.productionCostWood + " wood" : "") + "!";
 
         boolean ok = townHall.enqueueUnit(type);
         return ok ? type.name + " added to production queue."

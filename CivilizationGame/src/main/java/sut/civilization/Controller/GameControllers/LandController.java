@@ -145,6 +145,20 @@ public class LandController extends Controller {
             }
         }
 
+        // phase 2: about a third of the mountains become Mountain Ranges - fully
+        // impassable, no stone/iron, nothing buildable. never right next to the town
+        // hall (fixed at 7,7) so the starting area always stays open. this runs BEFORE
+        // resource assignment so ranges simply never get a stone deposit
+        Pair<Integer, Integer> thSpot = new Pair<>(7, 7);
+        ArrayList<Pair<Integer, Integer>> thRing = getAllNeighborsIndexes(thSpot);
+        for (int i = 0; i < Consts.MAP_SIZE.amount.x; i++) {
+            for (int j = 0; j < Consts.MAP_SIZE.amount.y; j++) {
+                if (map[i][j].getLandType() != LandType.MOUNTAIN) continue;
+                if ((i == thSpot.x && j == thSpot.y) || thRing.contains(new Pair<>(i, j))) continue;
+                if (random.nextInt(3) == 0) map[i][j].setLandType(LandType.MOUNTAIN_RANGE);
+            }
+        }
+
         // give tiles their resources: forest always has wood, mountain always has stone
         // (iron is a separate rarer thing on top), meadow/plain only sometimes get food
         for (int i = 0; i < Consts.MAP_SIZE.amount.x; i++) {
@@ -186,6 +200,9 @@ public class LandController extends Controller {
         ensureStartingFoodTiles(map, thCoord);
         // same deal for lumber mill - make sure at least one neighbor is forest
         ensureStartingForestTile(map, thCoord);
+        // phase 2: mountain ranges must never wall the town hall in - demote ranges
+        // until every normal tile on the map can be reached from the town hall
+        ensureTownHallNotEnclosed(map, thCoord);
         // town hall + neighbors are visible right from the start.
         // also counts as "explored" for border expander (it's the player's known starting
         // area, not something a unit happened to walk past)
@@ -222,7 +239,8 @@ public class LandController extends Controller {
             for (int j = 0; j < Consts.MAP_SIZE.amount.y; j++) {
                 Land land = map[i1][j];
                 int chance = new Random().nextInt(10);
-                if (chance <= 1 && land.getLandType() != LandType.MOUNTAIN && land.getCivilizedUnit() == null)
+                if (chance <= 1 && land.getLandType() != LandType.MOUNTAIN
+                        && land.getLandType() != LandType.MOUNTAIN_RANGE && land.getCivilizedUnit() == null)
                     land.setRuin(new Ruin());
             }
         }
@@ -257,7 +275,7 @@ public class LandController extends Controller {
             int i = random.nextInt(Consts.MAP_SIZE.amount.x);
             int j = random.nextInt(Consts.MAP_SIZE.amount.y);
             Land tile = map[i][j];
-            if (tile.getLandType() == LandType.MOUNTAIN) continue;
+            if (tile.getLandType() == LandType.MOUNTAIN || tile.getLandType() == LandType.MOUNTAIN_RANGE) continue;
             if (tile.getImprovement() != null || tile.getRuin() != null) continue;
             int dist = Math.abs(i - thCoord.x) + Math.abs(j - thCoord.y);
             if (dist < 3 || dist > 6) continue;
@@ -344,6 +362,62 @@ public class LandController extends Controller {
         land.setResource(new Resource(ResourceType.WOOD)); // forest tiles always have wood
     }
 
+    // phase 2: the spec says mountain ranges must never enclose the town hall. we go
+    // further and demand every non-range tile is reachable from the town hall, so no
+    // ruin/trading post can end up sealed off either. if the BFS from the town hall
+    // can't reach some tile, we knock one range (that touches the reachable area) back
+    // down to a normal mountain and try again - each pass removes one range so it
+    // always terminates
+    private static void ensureTownHallNotEnclosed(Land[][] map, Pair<Integer, Integer> thCoord) {
+        while (true) {
+            boolean[][] reachable = new boolean[Consts.MAP_SIZE.amount.x][Consts.MAP_SIZE.amount.y];
+            ArrayList<Pair<Integer, Integer>> queue = new ArrayList<>();
+            queue.add(thCoord);
+            reachable[thCoord.x][thCoord.y] = true;
+            while (!queue.isEmpty()) {
+                Pair<Integer, Integer> cur = queue.remove(queue.size() - 1);
+                for (Pair<Integer, Integer> nb : getAllNeighborsIndexes(cur)) {
+                    if (!Pair.isValid(nb) || reachable[nb.x][nb.y]) continue;
+                    if (map[nb.x][nb.y].getLandType() == LandType.MOUNTAIN_RANGE) continue;
+                    reachable[nb.x][nb.y] = true;
+                    queue.add(nb);
+                }
+            }
+
+            boolean allReachable = true;
+            for (int i = 0; i < Consts.MAP_SIZE.amount.x && allReachable; i++)
+                for (int j = 0; j < Consts.MAP_SIZE.amount.y && allReachable; j++)
+                    if (!reachable[i][j] && map[i][j].getLandType() != LandType.MOUNTAIN_RANGE)
+                        allReachable = false;
+            if (allReachable) return;
+
+            // open a passage: prefer a range tile that sits right between the reachable
+            // area and a sealed-off normal tile, otherwise any range on the frontier
+            Pair<Integer, Integer> demote = null;
+            Pair<Integer, Integer> fallback = null;
+            for (int i = 0; i < Consts.MAP_SIZE.amount.x && demote == null; i++) {
+                for (int j = 0; j < Consts.MAP_SIZE.amount.y && demote == null; j++) {
+                    if (map[i][j].getLandType() != LandType.MOUNTAIN_RANGE) continue;
+                    boolean touchesReachable = false, touchesSealed = false;
+                    for (Pair<Integer, Integer> nb : getAllNeighborsIndexes(new Pair<>(i, j))) {
+                        if (!Pair.isValid(nb)) continue;
+                        if (reachable[nb.x][nb.y]) touchesReachable = true;
+                        else if (map[nb.x][nb.y].getLandType() != LandType.MOUNTAIN_RANGE) touchesSealed = true;
+                    }
+                    if (touchesReachable && touchesSealed) demote = new Pair<>(i, j);
+                    else if (touchesReachable && fallback == null) fallback = new Pair<>(i, j);
+                }
+            }
+            if (demote == null) demote = fallback;
+            if (demote == null) return; // no range touches the reachable area - nothing more we can do
+
+            Land land = map[demote.x][demote.y];
+            land.setLandType(LandType.MOUNTAIN);
+            // demoted back to a normal mountain, so it gets the guaranteed stone deposit
+            if (land.getResource() == null) land.setResource(new Resource(ResourceType.STONE));
+        }
+    }
+
     public static Land getLandByCoordinates(int x, int y) {
         return Game.instance.map[x][y];
     }
@@ -371,8 +445,12 @@ public class LandController extends Controller {
                         if (num1 == num2) {
                             Game.instance.dist[num1][num2] = 0;
                             Game.instance.path[num1][num2] = "";
-                        } else if (areNeighbors(new Pair<>(i1, j1), new Pair<>(i2, j2))) {
-                            Game.instance.dist[num1][num2] = land2.getMP();
+                        } else if (areNeighbors(new Pair<>(i1, j1), new Pair<>(i2, j2))
+                                // phase 2: mountain ranges are 100% impassable - leave
+                                // them at the "unreachable" distance like non-neighbors
+                                && land1.getLandType().isWalkable && land2.getLandType().isWalkable) {
+                            // getMPFrom applies the road discount when both hexes have one
+                            Game.instance.dist[num1][num2] = land2.getMPFrom(land1);
                             if (land2.getLandFeature() != null)
                                 Game.instance.dist[num1][num2] += land2.getLandFeature().getLandFeatureType().movementCost;
                             Game.instance.path[num1][num2] = "" + getIndex(new Pair<>(i1, j1), new Pair<>(i2, j2));

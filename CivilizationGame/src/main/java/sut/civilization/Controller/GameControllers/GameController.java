@@ -95,6 +95,9 @@ public class GameController extends Controller {
         }
         System.out.println("DEBUG: nextGameTurn() called, turn is now " + Game.instance.getTurn());
 
+        // phase 2 disasters: 5% chance at the start of every turn (P2-54)
+        DisasterController.rollForDisaster();
+
         for (User user : Game.instance.getPlayersInGame()) {
             Nation nation = user.getNation();
 
@@ -308,7 +311,9 @@ public class GameController extends Controller {
         int count = 0;
         for (Pair<Integer, Integer> nb : LandController.getAllNeighborsIndexes(center)) {
             if (!Pair.isValid(nb)) continue;
-            if (Game.instance.map[nb.x][nb.y].getLandType() == LandType.MOUNTAIN) count++;
+            // ranges are mountains too as far as the deep-mine bonus is concerned
+            if (Game.instance.map[nb.x][nb.y].getLandType() == LandType.MOUNTAIN
+                    || Game.instance.map[nb.x][nb.y].getLandType() == LandType.MOUNTAIN_RANGE) count++;
         }
         return count;
     }
@@ -361,6 +366,8 @@ public class GameController extends Controller {
         // hit unit cap - don't just throw away the finished unit (already paid for it),
         // keep it queued and try again next turn
         if (!nation.canTrainUnit()) { townHall.requeueFront(trained); return; }
+        // same idea for the separate military cap (phase 2)
+        if (trained.isMilitary && !nation.canTrainMilitaryUnit()) { townHall.requeueFront(trained); return; }
 
         Land mainLand = townHall.getMainLand();
         if (mainLand == null) { townHall.requeueFront(trained); return; }

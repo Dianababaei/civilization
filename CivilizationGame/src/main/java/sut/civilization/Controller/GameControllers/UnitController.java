@@ -89,7 +89,8 @@ public class UnitController extends GameController {
             lastStepRetrievedRuin = true;
         }
 
-        unit.setMP(Math.max(0, unit.getMP() - Game.instance.map[next.x][next.y].getMP()));
+        // getMPFrom gives the discounted cost when this step goes road-to-road
+        unit.setMP(Math.max(0, unit.getMP() - Game.instance.map[next.x][next.y].getMPFrom(originTile)));
         if (Game.instance.map[next.x][next.y].getLandFeature() != null)
             unit.setMP(Math.max(0, unit.getMP() - Game.instance.map[next.x][next.y].getLandFeature().getLandFeatureType().movementCost));
         unit.setPath(path.substring(1));

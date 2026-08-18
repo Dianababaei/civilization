@@ -77,8 +77,13 @@ public class TownHall {
     public boolean enqueueUnit(CivilizedUnitType type) {
         if (isBusy()) return false;
         if (!ownerNation.canTrainUnit()) return false;
+        // phase 2 military units: TH level gate, separate military cap, wood cost
+        if (level < type.requiredTownHallLevel) return false;
+        if (type.isMilitary && !ownerNation.canTrainMilitaryUnit()) return false;
         if (ownerNation.getFood().getBalance() < type.productionCostFood) return false;
+        if (ownerNation.getWood().getBalance() < type.productionCostWood) return false;
         ownerNation.getFood().spend(type.productionCostFood);
+        ownerNation.getWood().spend(type.productionCostWood);
         productionQueue.addLast(ProductionOrder.trainUnit(type));
         return true;
     }

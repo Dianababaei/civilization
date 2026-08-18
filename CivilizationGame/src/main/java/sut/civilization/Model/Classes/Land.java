@@ -27,6 +27,8 @@ public class Land {
     // 2 -> visible (shown)
     protected Resource resource;
     protected boolean hasIron = false;
+    /** Phase 2: builder-built road. Moving between two road hexes costs only 1 AP. */
+    protected boolean hasRoad = false;
     /** Phase 2: volcano hexes are a visually distinct mountain subtype set at map generation. */
     protected boolean isVolcano = false;
     /** Independent depletable iron deposit; only set on mountain tiles where hasIron is true. */
@@ -83,6 +85,23 @@ public class Land {
                 == sut.civilization.Model.ModulEnums.Season.WINTER ? 1 : 0;
         return landType.movementCost + winterPenalty;
     }
+
+    /**
+     * Phase 2 roads: cost to enter this hex when coming from a specific hex.
+     * If both hexes have a road the step costs just 1 (e.g. forest 2 -> 1);
+     * the winter +1 still applies on top since it hits every land hex.
+     */
+    public int getMPFrom(Land from) {
+        if (from != null && from.hasRoad() && this.hasRoad) {
+            int winterPenalty = sut.civilization.Model.ModulEnums.Season.forTurn(Game.instance.getTurn())
+                    == sut.civilization.Model.ModulEnums.Season.WINTER ? 1 : 0;
+            return Math.min(getMP(), 1 + winterPenalty);
+        }
+        return getMP();
+    }
+
+    public boolean hasRoad() { return hasRoad; }
+    public void setHasRoad(boolean hasRoad) { this.hasRoad = hasRoad; }
 
     public int getCost() {
         return cost;

@@ -106,6 +106,29 @@ public class Nation {
     // before any town bonuses get applied
     public void setBaseUnitCap(int baseUnitCap) { this.baseUnitCap = baseUnitCap; }
 
+    // ── Military unit cap (Phase 2, P2-13) ────────────────────────────────────
+    // separate from the total cap: 5 military units per town hall level (5/10/15).
+    // military units still count against the total cap too.
+
+    private static final int MILITARY_CAP_PER_TH_LEVEL = 5;
+
+    public int getMilitaryUnitCap() {
+        return (townHall == null ? 1 : townHall.getLevel()) * MILITARY_CAP_PER_TH_LEVEL;
+    }
+
+    public int getMilitaryUnitCount() {
+        int count = 0;
+        for (Unit u : units) {
+            if (u instanceof CivilizedUnit
+                    && ((CivilizedUnit) u).getCivilizedUnitType().isMilitary) count++;
+        }
+        return count;
+    }
+
+    public boolean canTrainMilitaryUnit() {
+        return getMilitaryUnitCount() < getMilitaryUnitCap();
+    }
+
     // ── Starvation ────────────────────────────────────────────────────────────
 
     public boolean isInStarvation() { return inStarvation; }
@@ -185,8 +208,9 @@ public class Nation {
     // Recomputed from current state every call (no stored counter to go stale):
     //   -1 per Town (each new settlement makes people grumpy)
     //   -1 while the unit cap is maxed out (crowding)
+    //   -1 while the MILITARY cap is maxed out (P2-25)
     //   +2 per Monument
-    //   +1 if a unit is garrisoned on the Town Hall tile (people feel safe)
+    //   +1 if a MILITARY unit is garrisoned on the Town Hall tile (people feel safe)
     // Tiers: >= +3 Golden Age (+10% production) | -3..-4 workers each produce 1 less |
     //        <= -5 riot: worker penalty AND every unit loses 1 AP per turn
 
@@ -206,9 +230,13 @@ public class Nation {
             if (imp.getImprovementType() == sut.civilization.Model.ModulEnums.ImprovementType.MONUMENT) happiness += 2;
         }
         if (units.size() >= getUnitCap()) happiness -= 1;
+        if (getMilitaryUnitCount() >= getMilitaryUnitCap()) happiness -= 1;
+        // spec (P2-25): the garrison bonus needs a MILITARY unit on the town hall
+        // hex, a worker standing there doesn't make anyone feel safer
         if (townHall != null && townHall.getMainLand() != null
                 && townHall.getMainLand().getCivilizedUnit() != null
-                && townHall.getMainLand().getCivilizedUnit().getOwnerNation() == this) {
+                && townHall.getMainLand().getCivilizedUnit().getOwnerNation() == this
+                && townHall.getMainLand().getCivilizedUnit().getCivilizedUnitType().isMilitary) {
             happiness += 1;
         }
         return happiness;

@@ -26,6 +26,10 @@ public class WorkerController extends GameController {
         if (tile.getVisibility() == 0)
             return "This hex hasn't been explored yet!";
 
+        // phase 2: mountain ranges are 100% off limits for construction
+        if (tile.getLandType() == LandType.MOUNTAIN_RANGE)
+            return "Nothing can be built on a Mountain Range!";
+
         // buildings have to go inside our own territory
         Nation nation = currentTurnUser.getNation();
         if (!nation.ownsHex(tile.getI(), tile.getJ()))
@@ -285,5 +289,55 @@ public class WorkerController extends GameController {
     // same deal, roads got cut from the new model
     public static String setWorkerToRemoveRoute() {
         return "Routes are not part of the current game.";
+    }
+
+    // ── Phase 2: roads ────────────────────────────────────────────────────────
+    // Builder lays a road on its current hex. Moving between two road hexes costs
+    // just 1 AP (e.g. forest 2 -> 1). Roads don't consume a builder charge - they're
+    // minor infrastructure, not a building - and they have no upkeep.
+
+    public static final int ROAD_AP_COST = 1;
+    public static final int ROAD_WOOD_COST = 2;
+    public static final int ROAD_STONE_COST = 1;
+
+    // null = road would work here, otherwise the reason it can't
+    public static String checkCanBuildRoad() {
+        if (selectedCivilizedUnit == null)
+            return "Select a Builder first!";
+        if (selectedCivilizedUnit.getCivilizedUnitType() != CivilizedUnitType.BUILDER)
+            return "Selected unit is not a Builder!";
+        if (!selectedCivilizedUnit.hasAp(ROAD_AP_COST))
+            return "Builder has no AP left!";
+
+        Land tile = Game.instance.map[selectedCivilizedUnit.getLocation().x][selectedCivilizedUnit.getLocation().y];
+        if (tile.getVisibility() == 0)
+            return "This hex hasn't been explored yet!";
+        Nation nation = currentTurnUser.getNation();
+        if (!nation.ownsHex(tile.getI(), tile.getJ()))
+            return "Roads can only be built inside your territory!";
+        if (tile.getLandType() == LandType.MOUNTAIN_RANGE)
+            return "Nothing can be built on a Mountain Range!";
+        if (tile.hasRoad())
+            return "There is already a road here!";
+        if (!nation.canAfford(0, ROAD_WOOD_COST, ROAD_STONE_COST, 0))
+            return "Not enough resources for a road (" + ROAD_WOOD_COST + " Wood + " + ROAD_STONE_COST + " Stone)!";
+        return null;
+    }
+
+    public static String buildRoad() {
+        String blocked = checkCanBuildRoad();
+        if (blocked != null) return blocked;
+
+        Nation nation = currentTurnUser.getNation();
+        Land tile = Game.instance.map[selectedCivilizedUnit.getLocation().x][selectedCivilizedUnit.getLocation().y];
+        nation.spend(0, ROAD_WOOD_COST, ROAD_STONE_COST, 0);
+        tile.setHasRoad(true);
+        selectedCivilizedUnit.spendAp(ROAD_AP_COST);
+
+        // the cached distance/path matrix doesn't know about the new road yet
+        LandController.initializeDistances();
+        LandController.updateDistances();
+        return "Road built at (" + tile.getI() + "," + tile.getJ()
+                + "). Moving between two road hexes costs 1 AP.";
     }
 }
