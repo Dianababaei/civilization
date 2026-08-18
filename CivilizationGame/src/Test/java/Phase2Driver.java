@@ -1,4 +1,5 @@
 import sut.civilization.Controller.GameControllers.*;
+import sut.civilization.Enums.Consts;
 import sut.civilization.Model.Classes.*;
 import sut.civilization.Model.ModulEnums.*;
 
@@ -28,6 +29,9 @@ public class Phase2Driver {
         setup();
 
         testSeasons();
+        testMountainRangeAndRoads();
+        testMilitaryUnits();
+        testEarthquake();
         testTimedResearch();
         testBusyQueueBlocksNewOrders();
         testCancelNoRefund();
@@ -46,6 +50,9 @@ public class Phase2Driver {
     }
 
     static void setup() {
+        // random 5%-per-turn quakes would make these tests flaky - we only test
+        // earthquakes via the direct trigger
+        DisasterController.randomDisastersEnabled = false;
         user = new User("player", "", "Player");
         Game.instance.setLoggedInUser(user);
         Game.instance.getPlayersInGame().clear();
@@ -59,6 +66,213 @@ public class Phase2Driver {
     }
 
     static TownHall th() { return nation.getTownHall(); }
+
+    // ── 0b. mountain ranges + roads ──────────────────────────────────────────
+    static void testMountainRangeAndRoads() {
+        info("--- mountain ranges + roads ---");
+        Pair<Integer, Integer> thCoord = new Pair<>(th().getMainLand().getI(), th().getMainLand().getJ());
+
+        boolean rangeNextToTh = false;
+        for (Pair<Integer, Integer> nb : LandController.getAllNeighborsIndexes(thCoord))
+            if (Pair.isValid(nb) && Game.instance.map[nb.x][nb.y].getLandType() == LandType.MOUNTAIN_RANGE)
+                rangeNextToTh = true;
+        check("no mountain range right next to the town hall", !rangeNextToTh);
+
+        // BFS from the town hall over non-range tiles - the generator promises
+        // it never walls any normal tile off
+        int X = Consts.MAP_SIZE.amount.x, Y = Consts.MAP_SIZE.amount.y;
+        boolean[][] reachable = new boolean[X][Y];
+        ArrayList<Pair<Integer, Integer>> queue = new ArrayList<>();
+        queue.add(thCoord);
+        reachable[thCoord.x][thCoord.y] = true;
+        while (!queue.isEmpty()) {
+            Pair<Integer, Integer> cur = queue.remove(queue.size() - 1);
+            for (Pair<Integer, Integer> nb : LandController.getAllNeighborsIndexes(cur)) {
+                if (!Pair.isValid(nb) || reachable[nb.x][nb.y]) continue;
+                if (Game.instance.map[nb.x][nb.y].getLandType() == LandType.MOUNTAIN_RANGE) continue;
+                reachable[nb.x][nb.y] = true;
+                queue.add(nb);
+            }
+        }
+        boolean allReachable = true;
+        boolean rangeHasDeposit = false;
+        int ranges = 0;
+        for (int i = 0; i < X; i++) {
+            for (int j = 0; j < Y; j++) {
+                Land t = Game.instance.map[i][j];
+                if (t.getLandType() == LandType.MOUNTAIN_RANGE) {
+                    ranges++;
+                    if (t.getResource() != null) rangeHasDeposit = true;
+                } else if (!reachable[i][j]) allReachable = false;
+            }
+        }
+        info(ranges + " mountain range tiles on this map");
+        check("map gen never walls any normal tile off from the town hall", allReachable);
+        check("mountain ranges have no stone deposit", !rangeHasDeposit);
+
+        // impassability: turn a corner tile into a range and confirm the path
+        // matrix now treats it as unreachable even from a direct neighbor
+        Land corner = Game.instance.map[0][0];
+        LandType cornerBackup = corner.getLandType();
+        corner.setLandType(LandType.MOUNTAIN_RANGE);
+        LandController.initializeDistances();
+        LandController.updateDistances();
+        int from = LandController.getLandNumber(Game.instance.map[0][1]);
+        int to = LandController.getLandNumber(corner);
+        check("mountain range is unreachable in the path matrix", Game.instance.dist[from][to] >= 1000);
+        corner.setLandType(cornerBackup);
+
+        // road discount: two adjacent forest tiles, entering costs 2 normally, 1 by road
+        int turnBackup = Game.instance.getTurn();
+        Game.instance.setTurn(5); // spring, no winter penalty
+        Land a = Game.instance.map[3][3];
+        Land b = Game.instance.map[3][4];
+        LandType aBackup = a.getLandType(), bBackup = b.getLandType();
+        a.setLandType(LandType.FOREST);
+        b.setLandType(LandType.FOREST);
+        check("forest step costs 2 AP without a road", b.getMPFrom(a) == 2);
+        a.setHasRoad(true);
+        b.setHasRoad(true);
+        check("road-to-road step costs 1 AP", b.getMPFrom(a) == 1);
+        Game.instance.setTurn(35); // winter's +1 still applies on roads
+        check("winter road step costs 2 AP", b.getMPFrom(a) == 2);
+        Game.instance.setTurn(turnBackup);
+        a.setHasRoad(false); b.setHasRoad(false);
+        a.setLandType(aBackup); b.setLandType(bBackup);
+        LandController.initializeDistances();
+        LandController.updateDistances();
+    }
+
+    // ── 0c. military units: training gates, stats, garrison, military cap ────
+    static void testMilitaryUnits() {
+        info("--- military units ---");
+        check("military cap at TH level 1 is 5", nation.getMilitaryUnitCap() == 5);
+
+        nation.getFood().add(100);
+        nation.getWood().add(100);
+
+        check("archer blocked at TH level 1",
+                TownHallController.enqueueUnit("Archer").contains("level 2"));
+
+        // cavalry gate: level ok but no stable anywhere
+        th().setLevel(2);
+        check("cavalry needs a military stable",
+                TownHallController.enqueueUnit("Cavalry").contains("Military Stable"));
+        th().setLevel(1);
+
+        int foodBefore = nation.getFood().getBalance();
+        int woodBefore = nation.getWood().getBalance();
+        check("swordsman trainable at TH level 1",
+                TownHallController.enqueueUnit("Swordsman").contains("added to production queue"));
+        check("swordsman costs 20 food", nation.getFood().getBalance() == foodBefore - 20);
+        check("swordsman costs 10 wood", nation.getWood().getBalance() == woodBefore - 10);
+
+        GameController.nextGameTurn();
+        GameController.nextGameTurn();
+        CivilizedUnit swordsman = null;
+        for (Unit u : nation.getUnits())
+            if (u instanceof CivilizedUnit
+                    && ((CivilizedUnit) u).getCivilizedUnitType() == CivilizedUnitType.SWORDSMAN)
+                swordsman = (CivilizedUnit) u;
+        check("swordsman spawned after 2 turns", swordsman != null);
+        if (swordsman == null) return;
+        check("swordsman has 1 HP", swordsman.getHp() == 1);
+        check("swordsman has 2 max AP", swordsman.getMaxAp() == 2);
+
+        // garrison: a military unit on the TH hex gives +1 happiness, a worker doesn't
+        Land thLand = th().getMainLand();
+        Land swordsmanTile = Game.instance.map[swordsman.getLocation().x][swordsman.getLocation().y];
+        if (swordsmanTile.getCivilizedUnit() == swordsman) swordsmanTile.setCivilizedUnit(null);
+        CivilizedUnit thOccupantBackup = thLand.getCivilizedUnit();
+        thLand.setCivilizedUnit(swordsman);
+        int withGarrison = nation.getHappiness();
+        thLand.setCivilizedUnit(null);
+        check("military garrison on TH gives +1 happiness", withGarrison == nation.getHappiness() + 1);
+
+        CivilizedUnit anyWorker = null;
+        for (Unit u : nation.getUnits())
+            if (u instanceof CivilizedUnit
+                    && ((CivilizedUnit) u).getCivilizedUnitType() == CivilizedUnitType.WORKER)
+                anyWorker = (CivilizedUnit) u;
+        if (anyWorker != null) {
+            int without = nation.getHappiness();
+            thLand.setCivilizedUnit(anyWorker);
+            check("a worker on the TH hex gives NO garrison bonus", nation.getHappiness() == without);
+            thLand.setCivilizedUnit(null);
+        }
+        thLand.setCivilizedUnit(thOccupantBackup);
+
+        // military cap: fill to 5 military -> -1 happiness, training blocked, civil still fine.
+        // bump the total cap first so we're testing the MILITARY cap, not the total one
+        int baseCapBackup = nation.getUnitCap(); // TH L1, no towns -> equals the base cap
+        nation.setBaseUnitCap(30);
+        int beforeCap = nation.getHappiness();
+        ArrayList<CivilizedUnit> extras = new ArrayList<>();
+        while (nation.getMilitaryUnitCount() < nation.getMilitaryUnitCap()) {
+            CivilizedUnit s = new CivilizedUnit(CivilizedUnitType.SWORDSMAN, nation, new Pair<>(0, 0));
+            nation.addUnit(s);
+            extras.add(s);
+        }
+        check("reaching the military cap costs -1 happiness", nation.getHappiness() == beforeCap - 1);
+        check("military training blocked at military cap",
+                TownHallController.enqueueUnit("Swordsman").contains("Military cap"));
+        check("civil units still trainable at military cap",
+                TownHallController.enqueueUnit("Worker").contains("added to production queue"));
+        TownHallController.cancelCurrentProduction();
+
+        // clean up so later tests see the same nation state as before
+        for (CivilizedUnit s : extras) nation.removeUnit(s);
+        nation.removeUnit(swordsman);
+        nation.setBaseUnitCap(baseCapBackup);
+    }
+
+    // ── 0d. earthquake (P2-54/55) ────────────────────────────────────────────
+    static void testEarthquake() {
+        info("--- earthquake ---");
+        check("earthquake area is 19 hexes (radius 2)",
+                DisasterController.hexesInRadius(new Pair<>(7, 7), 2).size() == 19);
+
+        // controlled scene far away from the town hall: building + road + 2 units
+        Pair<Integer, Integer> center = new Pair<>(2, 2);
+        Land centerTile = Game.instance.map[center.x][center.y];
+        centerTile.setImprovement(new Improvement(ImprovementType.FARM));
+        Land roadTile = Game.instance.map[2][3];
+        roadTile.setHasRoad(true);
+
+        Pair<Integer, Integer> sLoc = new Pair<>(3, 2);
+        CivilizedUnit sword = new CivilizedUnit(CivilizedUnitType.SWORDSMAN, nation, sLoc);
+        Game.instance.map[sLoc.x][sLoc.y].setCivilizedUnit(sword);
+        nation.addUnit(sword);
+        Pair<Integer, Integer> wLoc = new Pair<>(1, 2);
+        CivilizedUnit worker = new CivilizedUnit(CivilizedUnitType.WORKER, nation, wLoc);
+        Game.instance.map[wLoc.x][wLoc.y].setCivilizedUnit(worker);
+        nation.addUnit(worker);
+
+        int thHpBefore = th().getHp();
+        DisasterController.triggerEarthquake(center);
+
+        check("building in the area is destroyed", centerTile.getImprovement() == null);
+        check("road in the area is destroyed", !roadTile.hasRoad());
+        check("swordsman (1 HP) is killed and removed from the map",
+                !nation.getUnits().contains(sword)
+                        && Game.instance.map[sLoc.x][sLoc.y].getCivilizedUnit() == null);
+        check("worker survives with 90 HP",
+                nation.getUnits().contains(worker) && worker.getHp() == 90);
+        check("far-away town hall is untouched", th().getHp() == thHpBefore);
+
+        // now hit the town hall repeatedly: -50 each time but NEVER below 1 HP
+        DisasterController.triggerEarthquake(new Pair<>(7, 7));
+        check("town hall takes -50 HP", th().getHp() == Math.max(1, thHpBefore - 50));
+        for (int k = 0; k < 6; k++) DisasterController.triggerEarthquake(new Pair<>(7, 7));
+        check("town hall never drops below 1 HP", th().getHp() == 1);
+
+        // put the world back so later tests see a sane state
+        th().setHp(thHpBefore);
+        Game.instance.map[wLoc.x][wLoc.y].setCivilizedUnit(null);
+        nation.removeUnit(worker);
+        DisasterController.lastQuakeArea = null;
+        DisasterController.lastQuakeCenter = null;
+    }
 
     // ── 0. seasons: 10-turn cycle + winter movement penalty ──────────────────
     static void testSeasons() {
