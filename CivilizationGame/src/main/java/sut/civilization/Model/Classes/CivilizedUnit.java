@@ -30,6 +30,8 @@ public class CivilizedUnit extends Unit {
         super(type.name, type.ap, location, ownerNation);
         this.civilizedUnitType = type;
         this.charges = (type == CivilizedUnitType.BUILDER) ? BUILDER_MAX_CHARGES : 0;
+        // phase 2: military units use their spec HP (1/1/2), civil units keep the default 100
+        this.hp = type.maxHp;
     }
 
     // ── Builder ───────────────────────────────────────────────────────────────
