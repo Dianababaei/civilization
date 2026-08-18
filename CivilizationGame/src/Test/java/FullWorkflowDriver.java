@@ -51,6 +51,8 @@ public class FullWorkflowDriver {
 
     // ── Setup ────────────────────────────────────────────────────────────────
     static void setup() {
+        // random 5%-per-turn earthquakes would make this driver flaky
+        DisasterController.randomDisastersEnabled = false;
         user = new User("player", "", "Player");
         Game.instance.setLoggedInUser(user);
         Game.instance.getPlayersInGame().clear();
