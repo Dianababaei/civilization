@@ -130,6 +130,8 @@ public class SaveController extends GameController {
         TechnologyController.updateNextAvailableTechnologies();
         CityController.updateAffordableLands();
 
-        return "Loaded \"" + data.name + "\" (turn " + data.turn + ", " + data.season + ").";
+        // say WHICH SLOT was loaded, not just the save's name - a save named "1"
+        // sitting in slot2 made this message really confusing otherwise
+        return "Loaded " + slot + " - \"" + data.name + "\" (turn " + data.turn + ", " + data.season + ").";
     }
 }
