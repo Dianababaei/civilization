@@ -13,6 +13,8 @@ public class Land implements java.io.Serializable {
 
     protected int cost;
     protected CivilizedUnit civilizedUnit = null;
+    /** Phase 2 combat: hostile occupant (barbarian / bear / camp), max one per hex. */
+    protected Enemy enemy = null;
 
     protected boolean isAPartOfPath = false;
     protected LandType landType;
@@ -77,6 +79,14 @@ public class Land implements java.io.Serializable {
 
     public CivilizedUnit getCivilizedUnit() {
         return civilizedUnit;
+    }
+
+    public Enemy getEnemy() {
+        return enemy;
+    }
+
+    public void setEnemy(Enemy enemy) {
+        this.enemy = enemy;
     }
 
     public int getMP() {

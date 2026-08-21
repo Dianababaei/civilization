@@ -21,6 +21,14 @@ public class Game implements java.io.Serializable {
     private transient JPanel screenContainer;
     private transient SceneFactory sceneFactory;
     private User loggedInUser;
+    // phase 2 (P2-66): dice, disasters etc. all roll from this one Random. It is NOT
+    // transient on purpose - the spec says the RNG state must survive save/load, so
+    // reloading a save can't reroll different random events
+    private java.util.Random rng = new java.util.Random();
+    // phase 2 bear attacks (P2-57): the den forest hex and the "calm" cooldown.
+    // Kept on Game (not static) so they ride inside save files
+    public Pair<Integer, Integer> bearDen = null;
+    public int bearCalmUntilTurn = 0;
     private int turn = 1;
     // a number between 0 and players count in order to know witch user have to play
     private int subTurn = 0;
@@ -50,6 +58,12 @@ public class Game implements java.io.Serializable {
         this.cardLayout = old.cardLayout;
         this.screenContainer = old.screenContainer;
         this.sceneFactory = old.sceneFactory;
+    }
+
+    public java.util.Random getRng() {
+        // saves from before this field existed deserialize it as null
+        if (rng == null) rng = new java.util.Random();
+        return rng;
     }
 
     public int getSubTurn() {

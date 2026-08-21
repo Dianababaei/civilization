@@ -426,6 +426,25 @@ public class GamePlayController extends ViewController {
             b.setForeground(Color.WHITE);
             row2.add(b);
         }
+
+        // phase 2 combat: spawn something to fight right next to the Town Hall
+        JPanel row3 = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        row3.setOpaque(false);
+        row3.setMaximumSize(new Dimension(Integer.MAX_VALUE, 44));
+        JButton spawnBarbarian = new JButton("Spawn Barbarian");
+        JButton spawnBear = new JButton("Spawn Bear");
+        JButton spawnCamp = new JButton("Spawn Camp");
+        for (JButton b : new JButton[]{spawnBarbarian, spawnBear, spawnCamp}) {
+            b.setBackground(new Color(0x7a2020));
+            b.setForeground(Color.WHITE);
+            row3.add(b);
+            b.addActionListener(e -> {
+                String kind = b == spawnBarbarian ? "Barbarian" : b == spawnBear ? "Bear" : "Camp";
+                String msg = CheatController.debugSpawnEnemy(kind);
+                showPopUp(SwingUtilities.getWindowAncestor(root), msg);
+                updateWholeMap();
+            });
+        }
         res100.addActionListener(e -> {
             String msg = CheatController.debugAddAllResources(100);
             showPopUp(SwingUtilities.getWindowAncestor(root), msg);
@@ -436,12 +455,14 @@ public class GamePlayController extends ViewController {
             showPopUp(SwingUtilities.getWindowAncestor(root), msg);
             updateWholeMap();
             updateHud();
+            showPendingEnemyBattles();
         });
         turn5.addActionListener(e -> {
             String msg = CheatController.debugAdvanceTurns(5);
             showPopUp(SwingUtilities.getWindowAncestor(root), msg);
             updateWholeMap();
             updateHud();
+            showPendingEnemyBattles();
         });
         fillCap.addActionListener(e -> {
             String msg = CheatController.debugFillUnitsToCap();
@@ -477,9 +498,10 @@ public class GamePlayController extends ViewController {
         });
         content.add(row);
         content.add(row2);
+        content.add(row3);
 
         JScrollPane scrollPane = new JScrollPane(content);
-        scrollPane.setPreferredSize(new Dimension(580, 170));
+        scrollPane.setPreferredSize(new Dimension(580, 210));
         showPopupPanel(scrollPane);
     }
 
@@ -973,6 +995,43 @@ public class GamePlayController extends ViewController {
                 });
                 break;
             }
+            case ATTACK: {
+                // phase 2 dice combat (P2-14/15): pick a target in range, fight, and
+                // show the dice - the battle must never resolve silently
+                String blocked = CombatController.checkCanAttack(unit);
+                actionButton.setEnabled(blocked == null);
+                if (blocked != null) actionButton.setToolTipText(blocked);
+                actionButton.addActionListener(e -> {
+                    java.util.ArrayList<Pair<Integer, Integer>> targets = CombatController.getTargetsInRange(unit);
+                    if (targets.isEmpty()) return;
+                    Pair<Integer, Integer> picked = targets.get(0);
+                    if (targets.size() > 1) {
+                        String[] options = new String[targets.size()];
+                        for (int i = 0; i < targets.size(); i++) {
+                            Pair<Integer, Integer> t = targets.get(i);
+                            options[i] = Game.instance.map[t.x][t.y].getEnemy().getType().name
+                                    + " at (" + t.x + "," + t.y + ")";
+                        }
+                        int pick = JOptionPane.showOptionDialog(root, "Attack which enemy?", "Attack",
+                                JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[0]);
+                        if (pick < 0) return;
+                        picked = targets.get(pick);
+                    }
+                    String targetBlocked = CombatController.checkCanAttackTarget(unit, picked);
+                    if (targetBlocked != null) {
+                        showPopUp(SwingUtilities.getWindowAncestor(root), targetBlocked);
+                        return;
+                    }
+                    CombatController.BattleReport report = CombatController.attack(unit, picked);
+                    showBattleDialog(report);
+                    updateWholeMap();
+                    updateHud();
+                    // the attacker may have died in the battle - only refresh its popup if it lives
+                    if (GameController.getSelectedCivilizedUnit() == unit) showSelectedCivilizedUnitInfo();
+                    else closeActivePopup();
+                });
+                break;
+            }
             case DEMOLISH: {
                 String blocked = WorkerController.checkCanDemolish();
                 actionButton.setEnabled(blocked == null);
@@ -1322,6 +1381,19 @@ public class GamePlayController extends ViewController {
         int pick = JOptionPane.showOptionDialog(root, "Choose a slot to load:",
                 "Load Game", JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[0]);
         if (pick < 0) return;
+
+        // spec: a damaged slot must be marked and the player must be able to delete
+        // it (or just fall back to the autosave, which is right there in the list)
+        if (SaveController.isDamaged(slots[pick])) {
+            int del = JOptionPane.showConfirmDialog(root,
+                    "The file in " + slots[pick] + " is damaged and cannot be loaded.\n"
+                            + "Delete it? (You can also load the autosave instead.)",
+                    "Damaged save", JOptionPane.YES_NO_OPTION, JOptionPane.ERROR_MESSAGE);
+            if (del == JOptionPane.YES_OPTION)
+                showPopUp(SwingUtilities.getWindowAncestor(root), SaveController.deleteSlot(slots[pick]));
+            return;
+        }
+
         int sure = JOptionPane.showConfirmDialog(root,
                 "Loading throws away the current unsaved progress. Continue?",
                 "Load Game", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
@@ -1716,6 +1788,85 @@ public class GamePlayController extends ViewController {
             DisasterController.lastQuakeArea = null;
             DisasterController.lastQuakeCenter = null;
         }
+
+        // phase 2 combat: enemies fought back during turn processing - show every
+        // battle's dice (a battle must never resolve silently, P2-15)
+        showPendingEnemyBattles();
+    }
+
+    // ── Phase 2 combat: dice battle dialog (P2-15) ────────────────────────────
+    // shows every die BOTH graphically (big dice-face glyphs) and numerically, plus
+    // one line per compared pair - per spec a battle may never resolve silently
+
+    private void showBattleDialog(CombatController.BattleReport report) {
+        JPanel panel = new JPanel();
+        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+        panel.setBackground(new Color(0x1e1e1e));
+        panel.setBorder(BorderFactory.createEmptyBorder(15, 20, 15, 20));
+
+        JLabel title = new JLabel(report.title);
+        title.setFont(new Font("SansSerif", Font.BOLD, 16));
+        title.setForeground(new Color(0xf0c060));
+        title.setAlignmentX(Component.LEFT_ALIGNMENT);
+        panel.add(title);
+        panel.add(Box.createVerticalStrut(10));
+
+        if (report.attackerDice.length > 0)
+            panel.add(diceRow("Attacker rolls:", report.attackerDice, new Color(0xe0685e)));
+        if (report.defenderDice.length > 0)
+            panel.add(diceRow("Defender rolls:", report.defenderDice, new Color(0x6ea8dc)));
+
+        panel.add(Box.createVerticalStrut(8));
+        for (String line : report.lines) {
+            JLabel l = new JLabel(line);
+            l.setForeground(Color.WHITE);
+            l.setFont(new Font("SansSerif", Font.PLAIN, 12));
+            l.setAlignmentX(Component.LEFT_ALIGNMENT);
+            panel.add(l);
+        }
+
+        if (!report.summary.isEmpty()) {
+            panel.add(Box.createVerticalStrut(8));
+            JLabel summary = new JLabel(report.summary);
+            summary.setFont(new Font("SansSerif", Font.BOLD, 13));
+            summary.setForeground(new Color(0xf0c060));
+            summary.setAlignmentX(Component.LEFT_ALIGNMENT);
+            panel.add(summary);
+        }
+        JOptionPane.showMessageDialog(root, panel, "Battle!", JOptionPane.PLAIN_MESSAGE);
+    }
+
+    /** One row of dice: caption, then each die as a big Unicode dice face + its number. */
+    private JPanel diceRow(String caption, int[] dice, Color color) {
+        JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
+        row.setOpaque(false);
+        row.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JLabel cap = new JLabel(caption);
+        cap.setForeground(color);
+        cap.setFont(new Font("SansSerif", Font.BOLD, 13));
+        cap.setPreferredSize(new Dimension(110, 44));
+        row.add(cap);
+        for (int die : dice) {
+            // U+2680 is the one-pip die face, so value N is 0x2680 + N - 1
+            JLabel face = new JLabel(String.valueOf((char) (0x2680 + die - 1)));
+            face.setFont(new Font("Segoe UI Symbol", Font.PLAIN, 42));
+            face.setForeground(color);
+            row.add(face);
+            JLabel number = new JLabel(String.valueOf(die));
+            number.setFont(new Font("SansSerif", Font.BOLD, 18));
+            number.setForeground(Color.WHITE);
+            row.add(number);
+        }
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 50));
+        return row;
+    }
+
+    /** Shows the dice of every enemy attack that happened during turn processing. */
+    private void showPendingEnemyBattles() {
+        if (CombatController.lastEnemyBattles.isEmpty()) return;
+        for (CombatController.BattleReport report : new java.util.ArrayList<>(CombatController.lastEnemyBattles))
+            showBattleDialog(report);
+        CombatController.lastEnemyBattles.clear();
     }
 
     private Timer quakeShakeTimer;

@@ -79,17 +79,34 @@ public class SaveController extends GameController {
     public static SaveData peek(String slot) {
         File file = new File(saveDirectory, slot + ".sav");
         if (!file.exists()) return null;
-        try (ObjectInputStream in = new ObjectInputStream(new FileInputStream(file))) {
+        // the two streams are separate resources on purpose: on a damaged file the
+        // ObjectInputStream constructor throws, and if it owned the FileInputStream
+        // that stream would leak open - then Windows refuses to delete the file
+        try (FileInputStream fin = new FileInputStream(file);
+             ObjectInputStream in = new ObjectInputStream(fin)) {
             return (SaveData) in.readObject();
         } catch (Exception e) {
             return null;
         }
     }
 
+    /** True if a file exists in this slot but can't be read - corrupted/truncated. */
+    public static boolean isDamaged(String slot) {
+        return new File(saveDirectory, slot + ".sav").exists() && peek(slot) == null;
+    }
+
+    /** Deletes a slot's file (the UI offers this for damaged slots, per spec). */
+    public static String deleteSlot(String slot) {
+        File file = new File(saveDirectory, slot + ".sav");
+        if (!file.exists()) return "Slot " + slot + " is already empty!";
+        return file.delete() ? "Damaged file in " + slot + " deleted."
+                             : "Could not delete the file in " + slot + "!";
+    }
+
     /** One-line label for the slot list UI, e.g. "slot1 - camp3, turn 12, Winter, 2026-08-18 09:41". */
     public static String describeSlot(String slot) {
         SaveData data = peek(slot);
-        if (data == null) return slot + " - empty";
+        if (data == null) return isDamaged(slot) ? slot + " - DAMAGED file!" : slot + " - empty";
         String when = new SimpleDateFormat("yyyy-MM-dd HH:mm").format(new Date(data.savedAtMillis));
         return slot + " - " + data.name + ", turn " + data.turn + ", " + data.season + ", " + when;
     }
@@ -99,8 +116,13 @@ public class SaveController extends GameController {
         if (!file.exists()) return "Slot " + slot + " is empty!";
 
         SaveData data;
-        try (ObjectInputStream in = new ObjectInputStream(new FileInputStream(file))) {
+        try (FileInputStream fin = new FileInputStream(file);
+             ObjectInputStream in = new ObjectInputStream(fin)) {
             data = (SaveData) in.readObject();
+        } catch (java.io.InvalidClassException e) {
+            // a class changed shape since this file was written (e.g. new fields were
+            // added for combat) - per spec a clear error is the acceptable answer here
+            return "Load FAILED: this save was made by an older version of the game and can't be converted!";
         } catch (Exception e) {
             return "Load FAILED: the file is corrupted (" + e.getMessage() + ")!";
         }
@@ -126,6 +148,7 @@ public class SaveController extends GameController {
         turnNotifications.clear();
         DisasterController.lastQuakeArea = null;
         DisasterController.lastQuakeCenter = null;
+        CombatController.lastEnemyBattles.clear();
         LandGraphical.quakeFlashTiles.clear();
         TechnologyController.updateNextAvailableTechnologies();
         CityController.updateAffordableLands();

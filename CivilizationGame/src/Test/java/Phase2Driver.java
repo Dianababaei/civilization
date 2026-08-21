@@ -31,6 +31,7 @@ public class Phase2Driver {
         testSeasons();
         testMountainRangeAndRoads();
         testMilitaryUnits();
+        testCombat();
         testEarthquake();
         testTimedResearch();
         testBusyQueueBlocksNewOrders();
@@ -41,6 +42,10 @@ public class Phase2Driver {
         testBazaar();
         testTradingPost();
         testDemolition();
+        // runs late on purpose: it permanently unlocks a tech that raises the TH max
+        // HP cap, which would break the "max HP grew to 250" check further up
+        testDefensiveArchitecture();
+        testBearDen();
         // must run LAST: loading swaps out the whole Game object the other tests hold
         testSaveLoad();
 
@@ -55,6 +60,8 @@ public class Phase2Driver {
         // random 5%-per-turn quakes would make these tests flaky - we only test
         // earthquakes via the direct trigger
         DisasterController.randomDisastersEnabled = false;
+        // den bears roam on their own - only testBearDen turns them on
+        DisasterController.bearDenEnabled = false;
         // keep test saves/autosaves away from the player's real saves/ folder
         SaveController.saveDirectory = "target/test-saves";
         user = new User("player", "", "Player");
@@ -230,6 +237,217 @@ public class Phase2Driver {
         nation.setBaseUnitCap(baseCapBackup);
     }
 
+    // ── 0c2. dice combat (P2-14..17) ─────────────────────────────────────────
+    static void testCombat() {
+        info("--- dice combat ---");
+
+        // rule checks with fixed dice (comparePairs expects them sorted descending)
+        int[] r = CombatController.comparePairs(new int[]{6}, new int[]{5, 2});
+        check("attacker die 6 beats defender 5 -> defender takes the hit", r[0] == 1 && r[1] == 0);
+        r = CombatController.comparePairs(new int[]{4}, new int[]{4, 1});
+        check("tie favors the defender -> attacker takes the hit", r[0] == 0 && r[1] == 1);
+        r = CombatController.comparePairs(new int[]{2}, new int[]{5, 3});
+        check("attacker die 2 loses to defender 5", r[0] == 0 && r[1] == 1);
+
+        // controlled corner scene: swordsman next to a barbarian
+        Pair<Integer, Integer> sLoc = new Pair<>(12, 12);
+        Pair<Integer, Integer> bLoc = LandController.getAllNeighborsIndexes(sLoc).get(0);
+        Land sTile = Game.instance.map[sLoc.x][sLoc.y];
+        Land bTile = Game.instance.map[bLoc.x][bLoc.y];
+        sTile.setVisibility(2);
+        bTile.setVisibility(2);
+
+        CivilizedUnit sword = new CivilizedUnit(CivilizedUnitType.SWORDSMAN, nation, sLoc);
+        sTile.setCivilizedUnit(sword);
+        nation.addUnit(sword);
+        Enemy barbarian = new Enemy(EnemyType.BARBARIAN, bLoc);
+        bTile.setEnemy(barbarian);
+
+        check("a worker can never attack",
+                CombatController.checkCanAttack(new CivilizedUnit(CivilizedUnitType.WORKER, nation, new Pair<>(10, 10))) != null);
+        check("swordsman next to a barbarian may attack", CombatController.checkCanAttack(sword) == null);
+        GameController.setSelectedCivilizedUnit(sword);
+        check("moving onto an enemy hex is refused",
+                UnitController.unitSetPath(bLoc.x, bLoc.y, 0).contains("enemy"));
+        GameController.setSelectedCivilizedUnit(null);
+
+        // deterministic dice: seed the game RNG and pre-roll the same sequence ourselves
+        Game.instance.getRng().setSeed(123);
+        java.util.Random sim = new java.util.Random(123);
+        int expA = sim.nextInt(6) + 1;
+        int expD1 = sim.nextInt(6) + 1, expD2 = sim.nextInt(6) + 1;
+        int[] expDef = {Math.max(expD1, expD2), Math.min(expD1, expD2)};
+
+        int apBefore = sword.getCurrentAp();
+        CombatController.BattleReport report = CombatController.attack(sword, bLoc);
+        check("attacker rolls exactly 1 die (one per attacking unit)", report.attackerDice.length == 1);
+        check("barbarian defends with 2 dice", report.defenderDice.length == 2);
+        check("dice come from the game's saved RNG",
+                report.attackerDice[0] == expA
+                        && report.defenderDice[0] == expDef[0] && report.defenderDice[1] == expDef[1]);
+        check("one pair compared -> exactly one line per pair", !report.lines.isEmpty());
+        check("attacking costs 1 AP", sword.getCurrentAp() == apBefore - 1);
+        boolean swordDied = !nation.getUnits().contains(sword);
+        int hitsDealt = (2 - barbarian.getHp()) + (swordDied ? 1 : 0);
+        check("exactly 1 hit total was dealt (single pair)", hitsDealt == 1);
+
+        // keep attacking until the barbarian dies (fresh swordsman whenever ours falls)
+        int rounds = 0;
+        CivilizedUnit fighter = swordDied ? null : sword;
+        while (bTile.getEnemy() != null && rounds++ < 50) {
+            if (fighter == null || !nation.getUnits().contains(fighter)) {
+                fighter = new CivilizedUnit(CivilizedUnitType.SWORDSMAN, nation, sLoc);
+                sTile.setCivilizedUnit(fighter);
+                nation.addUnit(fighter);
+            }
+            fighter.setCurrentAp(2);
+            CombatController.attack(fighter, bLoc);
+        }
+        check("barbarian dies after enough lost pairs and leaves the map", bTile.getEnemy() == null);
+        if (fighter != null && nation.getUnits().contains(fighter)) {
+            sTile.setCivilizedUnit(null);
+            nation.removeUnit(fighter);
+        } else sTile.setCivilizedUnit(null);
+
+        // archer range: may attack at distance 2, a swordsman may not
+        Pair<Integer, Integer> aLoc = new Pair<>(12, 8);
+        Land aTile = Game.instance.map[aLoc.x][aLoc.y];
+        Pair<Integer, Integer> farLoc = null;
+        java.util.ArrayList<Pair<Integer, Integer>> ring1 = DisasterController.hexesInRadius(aLoc, 1);
+        for (Pair<Integer, Integer> hex : DisasterController.hexesInRadius(aLoc, 2))
+            if (Pair.isValid(hex) && !ring1.contains(hex)) { farLoc = hex; break; }
+        Land farTile = Game.instance.map[farLoc.x][farLoc.y];
+        aTile.setVisibility(2);
+        farTile.setVisibility(2);
+        Enemy farBear = new Enemy(EnemyType.BEAR, farLoc);
+        farTile.setEnemy(farBear);
+
+        CivilizedUnit archer = new CivilizedUnit(CivilizedUnitType.ARCHER, nation, aLoc);
+        aTile.setCivilizedUnit(archer);
+        nation.addUnit(archer);
+        check("archer may attack at distance 2", CombatController.checkCanAttackTarget(archer, farLoc) == null);
+        aTile.setCivilizedUnit(null);
+        nation.removeUnit(archer);
+        CivilizedUnit sword2 = new CivilizedUnit(CivilizedUnitType.SWORDSMAN, nation, aLoc);
+        aTile.setCivilizedUnit(sword2);
+        nation.addUnit(sword2);
+        check("swordsman may NOT attack at distance 2",
+                CombatController.checkCanAttackTarget(sword2, farLoc) != null);
+        aTile.setCivilizedUnit(null);
+        nation.removeUnit(sword2);
+        farTile.setEnemy(null);
+
+        // camp: dice battle while the guard lives, flat structure damage after (P2-16)
+        Pair<Integer, Integer> cLoc = new Pair<>(4, 12);
+        Pair<Integer, Integer> gLoc = LandController.getAllNeighborsIndexes(cLoc).get(0);
+        Land cTile = Game.instance.map[cLoc.x][cLoc.y];
+        cTile.setVisibility(2);
+        Game.instance.map[gLoc.x][gLoc.y].setVisibility(2);
+        Enemy camp = new Enemy(EnemyType.CAMP, cLoc);
+        cTile.setEnemy(camp);
+        CivilizedUnit raider = new CivilizedUnit(CivilizedUnitType.SWORDSMAN, nation, gLoc);
+        Game.instance.map[gLoc.x][gLoc.y].setCivilizedUnit(raider);
+        nation.addUnit(raider);
+
+        CombatController.BattleReport guardFight = CombatController.attack(raider, cLoc);
+        check("guarded camp fights back with dice", guardFight.defenderDice.length == 2);
+        check("structure HP untouched while the guard lives", camp.getHp() == EnemyType.CAMP.maxHp);
+
+        camp.setGuardHp(0); // guard dead - now it's a structure
+        if (!nation.getUnits().contains(raider)) {
+            raider = new CivilizedUnit(CivilizedUnitType.SWORDSMAN, nation, gLoc);
+            Game.instance.map[gLoc.x][gLoc.y].setCivilizedUnit(raider);
+            nation.addUnit(raider);
+        }
+        raider.setCurrentAp(2);
+        CombatController.BattleReport siege = CombatController.attack(raider, cLoc);
+        check("cleared camp takes NO dice, flat attack-power damage",
+                siege.attackerDice.length == 0 && camp.getHp() == EnemyType.CAMP.maxHp - CivilizedUnitType.SWORDSMAN.attackPower);
+        camp.setHp(5);
+        raider.setCurrentAp(2);
+        CombatController.attack(raider, cLoc);
+        check("camp at 0 HP is destroyed and leaves the map", cTile.getEnemy() == null);
+        Game.instance.map[gLoc.x][gLoc.y].setCivilizedUnit(null);
+        nation.removeUnit(raider);
+
+        // bear turn (P2-57): the bear hunts the nearest CIVILIAN first, then military
+        Pair<Integer, Integer> bearLoc = new Pair<>(2, 12);
+        java.util.ArrayList<Pair<Integer, Integer>> bearNbs = new java.util.ArrayList<>();
+        for (Pair<Integer, Integer> nb : LandController.getAllNeighborsIndexes(bearLoc))
+            if (Pair.isValid(nb)) bearNbs.add(nb);
+        Land bearTile = Game.instance.map[bearLoc.x][bearLoc.y];
+        Enemy bear = new Enemy(EnemyType.BEAR, bearLoc);
+        bearTile.setEnemy(bear);
+        CivilizedUnit victim = new CivilizedUnit(CivilizedUnitType.SWORDSMAN, nation, bearNbs.get(0));
+        Game.instance.map[bearNbs.get(0).x][bearNbs.get(0).y].setCivilizedUnit(victim);
+        nation.addUnit(victim);
+        CivilizedUnit bystander = new CivilizedUnit(CivilizedUnitType.WORKER, nation, bearNbs.get(1));
+        Game.instance.map[bearNbs.get(1).x][bearNbs.get(1).y].setCivilizedUnit(bystander);
+        nation.addUnit(bystander);
+
+        CombatController.lastEnemyBattles.clear();
+        DisasterController.bearTurn();
+        check("bear mauls the CIVILIAN first for 35 raw HP (P2-57 priority)", bystander.getHp() == 65);
+        check("the military unit next door is untouched", nation.getUnits().contains(victim) && victim.getHp() == 1);
+        check("the bear attack produced a visible battle report",
+                !CombatController.lastEnemyBattles.isEmpty());
+
+        // with the civilian gone, the military unit is next: 1 hit kills a swordsman
+        Game.instance.map[bystander.getLocation().x][bystander.getLocation().y].setCivilizedUnit(null);
+        nation.removeUnit(bystander);
+        DisasterController.bearTurn();
+        check("bear then kills the 1-HP swordsman with one direct hit (no dice)",
+                !nation.getUnits().contains(victim));
+
+        // attacking the bear back: a won pair chips its 120 HP by our attack power
+        CivilizedUnit hunter = new CivilizedUnit(CivilizedUnitType.SWORDSMAN, nation, bearNbs.get(0));
+        Game.instance.map[bearNbs.get(0).x][bearNbs.get(0).y].setCivilizedUnit(hunter);
+        nation.addUnit(hunter);
+        Pair<Integer, Integer> bearNow = bear.getLocation();
+        if (CombatController.hexDistance(new Pair<>(hunter.getLocation().x, hunter.getLocation().y), bearNow) <= 1) {
+            CombatController.BattleReport hunt = CombatController.attack(hunter, bearNow);
+            boolean won = hunt.attackerDice.length > 0 && hunt.defenderDice.length > 0
+                    && hunt.attackerDice[0] > hunt.defenderDice[0];
+            check("won pair vs bear deals attack power (10), lost pair kills the swordsman",
+                    won ? bear.getHp() == 120 - CivilizedUnitType.SWORDSMAN.attackPower
+                        : !nation.getUnits().contains(hunter));
+        }
+        if (nation.getUnits().contains(hunter)) {
+            Game.instance.map[hunter.getLocation().x][hunter.getLocation().y].setCivilizedUnit(null);
+            nation.removeUnit(hunter);
+        }
+        if (Game.instance.map[bearNow.x][bearNow.y].getEnemy() == bear)
+            Game.instance.map[bearNow.x][bearNow.y].setEnemy(null);
+
+        // enemy turn: a barbarian fights our unit with dice - we defend with 2 dice
+        Land barbTile = Game.instance.map[bearLoc.x][bearLoc.y];
+        Enemy barb2 = new Enemy(EnemyType.BARBARIAN, bearLoc);
+        barbTile.setEnemy(barb2);
+        CivilizedUnit cav = new CivilizedUnit(CivilizedUnitType.CAVALRY, nation, bearNbs.get(0));
+        Game.instance.map[bearNbs.get(0).x][bearNbs.get(0).y].setCivilizedUnit(cav);
+        nation.addUnit(cav);
+        CombatController.enemyTurn();
+        CombatController.BattleReport defense = CombatController.lastEnemyBattles.get(0);
+        check("defending against a barbarian: it rolls 1 die, we roll 2",
+                defense.attackerDice.length == 1 && defense.defenderDice.length == 2);
+        int totalHits = (2 - cav.getHp()) + (2 - barb2.getHp());
+        check("exactly 1 hit total in the defensive battle", totalHits == 1);
+        if (nation.getUnits().contains(cav)) {
+            Game.instance.map[cav.getLocation().x][cav.getLocation().y].setCivilizedUnit(null);
+            nation.removeUnit(cav);
+        }
+        barbTile.setEnemy(null);
+
+        // debug spawn helper used by the Debug panel
+        String spawnMsg = CheatController.debugSpawnEnemy("Bear");
+        check("debug spawn puts a bear near the town hall", spawnMsg.contains("spawned"));
+        for (int i = 0; i < Consts.MAP_SIZE.amount.x; i++)
+            for (int j = 0; j < Consts.MAP_SIZE.amount.y; j++)
+                Game.instance.map[i][j].setEnemy(null); // leave no enemies behind for later tests
+
+        CombatController.lastEnemyBattles.clear();
+    }
+
     // ── 0d. earthquake (P2-54/55) ────────────────────────────────────────────
     static void testEarthquake() {
         info("--- earthquake ---");
@@ -278,6 +496,162 @@ public class Phase2Driver {
         DisasterController.lastQuakeCenter = null;
     }
 
+    // ── 7. defensive architecture (P2-07): wall tech, defense 10->30, HP cap 350 ──
+    static void testDefensiveArchitecture() {
+        info("--- defensive architecture ---");
+        nation.getStone().add(150);
+
+        // the TH is level 2 here (upgrade test) - the tech needs the Capital (level 3)
+        check("defensive architecture blocked below TH level 3",
+                TownHallController.researchTechnology("Defensive Architecture").contains("level 3"));
+
+        // pre-wall baseline: a barbarian's 15 attack hits the TH for 15 - 10 defense = 5
+        Pair<Integer, Integer> thCoord = new Pair<>(th().getMainLand().getI(), th().getMainLand().getJ());
+        Pair<Integer, Integer> enemyLoc = null;
+        for (Pair<Integer, Integer> nb : LandController.getAllNeighborsIndexes(thCoord))
+            if (Pair.isValid(nb)) { enemyLoc = nb; break; }
+        // park every unit around the barbarian somewhere else so the TH is its only target
+        java.util.HashMap<Land, CivilizedUnit> stash = new java.util.HashMap<>();
+        for (Pair<Integer, Integer> nb : LandController.getAllNeighborsIndexes(enemyLoc))
+            if (Pair.isValid(nb)) {
+                Land t = Game.instance.map[nb.x][nb.y];
+                if (t.getCivilizedUnit() != null) { stash.put(t, t.getCivilizedUnit()); t.setCivilizedUnit(null); }
+            }
+        Game.instance.map[enemyLoc.x][enemyLoc.y].setEnemy(new Enemy(EnemyType.BARBARIAN, enemyLoc));
+        th().setHp(200);
+        CombatController.enemyTurn();
+        check("base defense 10 soaks the barbarian's 15 down to 5 damage", th().getHp() == 195);
+
+        th().setLevel(3);
+        int stoneBefore = nation.getStone().getBalance();
+        TownHallController.researchTechnology("Defensive Architecture");
+        check("accepted at TH level 3", th().isBusy());
+        check("costs 100 stone", nation.getStone().getBalance() == stoneBefore - 100);
+        for (int i = 0; i < TechnologyType.TECH_DEFENSE.turnsToResearch; i++) GameController.nextGameTurn();
+        check("researched after " + TechnologyType.TECH_DEFENSE.turnsToResearch + " turns",
+                nation.hasTechnology(TechnologyType.TECH_DEFENSE));
+
+        check("stone wall raises the TH max HP cap to 350", th().getMaxHp() == 350);
+        check("stone wall raises defense to 30", th().getDefense() == 30);
+        // defense 30 > attack 15, but every attack still chips the minimum 1
+        th().setHp(300);
+        CombatController.enemyTurn();
+        check("walled TH soaks the barbarian's 15 to the minimum 1 chip", th().getHp() == 299);
+
+        Game.instance.map[enemyLoc.x][enemyLoc.y].setEnemy(null);
+        for (java.util.Map.Entry<Land, CivilizedUnit> e : stash.entrySet())
+            e.getKey().setCivilizedUnit(e.getValue());
+        CombatController.lastEnemyBattles.clear();
+    }
+
+    // ── 8. bear den (P2-57): spawn, crowd scaling, hunting, calm period ───────
+    static int countBears() {
+        int bears = 0;
+        for (int i = 0; i < Consts.MAP_SIZE.amount.x; i++)
+            for (int j = 0; j < Consts.MAP_SIZE.amount.y; j++) {
+                Enemy e = Game.instance.map[i][j].getEnemy();
+                if (e != null && e.getType() == EnemyType.BEAR) bears++;
+            }
+        return bears;
+    }
+
+    static void testBearDen() {
+        info("--- bear den ---");
+        DisasterController.bearDenEnabled = true;
+        Game.instance.bearDen = null;
+        Game.instance.bearCalmUntilTurn = 0;
+        DisasterController.ensureBearDen();
+        Pair<Integer, Integer> den = Game.instance.bearDen;
+        check("a den is picked on a forest hex",
+                den != null && Game.instance.map[den.x][den.y].getLandType() == LandType.FOREST);
+        if (den == null) { DisasterController.bearDenEnabled = false; return; }
+        Pair<Integer, Integer> thCoord = new Pair<>(th().getMainLand().getI(), th().getMainLand().getJ());
+        check("den keeps its distance from the town hall",
+                CombatController.hexDistance(den, thCoord) >= 3);
+
+        // the auto-picked den can still reach the town hall's unit cluster (radius 3),
+        // so for the BEHAVIOR checks we move the den to a quiet far corner
+        Pair<Integer, Integer> quiet = new Pair<>(13, 13);
+        Land quietTile = Game.instance.map[quiet.x][quiet.y];
+        LandType quietBackup = quietTile.getLandType();
+        quietTile.setLandType(LandType.FOREST);
+        for (Pair<Integer, Integer> hex : DisasterController.hexesInRadius(quiet, 3))
+            if (Pair.isValid(hex) && Game.instance.map[hex.x][hex.y].getCivilizedUnit() != null) {
+                nation.removeUnit(Game.instance.map[hex.x][hex.y].getCivilizedUnit());
+                Game.instance.map[hex.x][hex.y].setCivilizedUnit(null);
+            }
+        Game.instance.bearDen = quiet;
+        den = quiet;
+
+        // no units near the den -> nothing happens
+        DisasterController.bearTurn();
+        check("no bear while nobody is near the den", countBears() == 0);
+
+        // park a worker right next to the den -> one bear comes out and mauls it
+        Pair<Integer, Integer> baitSpot = null;
+        for (Pair<Integer, Integer> nb : LandController.getAllNeighborsIndexes(den))
+            if (Pair.isValid(nb) && Game.instance.map[nb.x][nb.y].getLandType().isWalkable
+                    && Game.instance.map[nb.x][nb.y].getCivilizedUnit() == null
+                    && Game.instance.map[nb.x][nb.y].getEnemy() == null) { baitSpot = nb; break; }
+        CivilizedUnit bait = new CivilizedUnit(CivilizedUnitType.WORKER, nation, baitSpot);
+        Game.instance.map[baitSpot.x][baitSpot.y].setCivilizedUnit(bait);
+        nation.addUnit(bait);
+        DisasterController.bearTurn();
+        check("one bear spawns when a unit nears the den (base 1)", countBears() == 1);
+        check("the bear hunts the worker the same turn (35 raw HP)", bait.getHp() == 65);
+
+        // 3 units within radius 3 -> the den sends out a second bear (max 2)
+        java.util.ArrayList<CivilizedUnit> crowd = new java.util.ArrayList<>();
+        for (Pair<Integer, Integer> hex : DisasterController.hexesInRadius(den, 2)) {
+            if (crowd.size() >= 2) break;
+            if (!Pair.isValid(hex) || hex.equals(den)) continue;
+            Land t = Game.instance.map[hex.x][hex.y];
+            if (!t.getLandType().isWalkable || t.getCivilizedUnit() != null || t.getEnemy() != null) continue;
+            CivilizedUnit extra = new CivilizedUnit(CivilizedUnitType.WORKER, nation, hex);
+            t.setCivilizedUnit(extra);
+            nation.addUnit(extra);
+            crowd.add(extra);
+        }
+        DisasterController.bearTurn();
+        check("3+ units near the den -> 2 bears (max 2)", countBears() == 2);
+
+        // pull everyone out -> the bears go home and the area calms down for 5 turns
+        for (CivilizedUnit u : crowd) {
+            Game.instance.map[u.getLocation().x][u.getLocation().y].setCivilizedUnit(null);
+            nation.removeUnit(u);
+        }
+        if (nation.getUnits().contains(bait)) {
+            Game.instance.map[bait.getLocation().x][bait.getLocation().y].setCivilizedUnit(null);
+            nation.removeUnit(bait);
+        }
+        DisasterController.bearTurn();
+        check("bears return to the forest when no target is near the den", countBears() == 0);
+        check("the area stays calm for 5 turns",
+                Game.instance.bearCalmUntilTurn == Game.instance.getTurn() + DisasterController.BEAR_CALM_TURNS);
+
+        // during the calm even a juicy target brings no bear; after it, they're back
+        CivilizedUnit bait2 = new CivilizedUnit(CivilizedUnitType.WORKER, nation, baitSpot);
+        Game.instance.map[baitSpot.x][baitSpot.y].setCivilizedUnit(bait2);
+        nation.addUnit(bait2);
+        DisasterController.bearTurn();
+        check("no new bear during the calm period", countBears() == 0);
+        Game.instance.bearCalmUntilTurn = 0;
+        DisasterController.bearTurn();
+        check("the bear comes back once the calm is over", countBears() == 1);
+
+        // clean up: no bears, no bait, den machinery off for the remaining tests
+        Game.instance.map[bait2.getLocation().x][bait2.getLocation().y].setCivilizedUnit(null);
+        nation.removeUnit(bait2);
+        for (int i = 0; i < Consts.MAP_SIZE.amount.x; i++)
+            for (int j = 0; j < Consts.MAP_SIZE.amount.y; j++)
+                Game.instance.map[i][j].setEnemy(null);
+        quietTile.setLandType(quietBackup);
+        Game.instance.bearDen = null;
+        Game.instance.bearCalmUntilTurn = 0;
+        DisasterController.bearDenEnabled = false;
+        CombatController.lastEnemyBattles.clear();
+    }
+
     // ── 99. save/load (P2-63..67) - runs last, load replaces the game object ──
     static void testSaveLoad() {
         info("--- save/load ---");
@@ -310,6 +684,21 @@ public class Phase2Driver {
         check("unit count restored", nation.getUnits().size() == unitsBefore);
         check("town hall restored with its map tile", th() != null && th().getMainLand() != null);
 
+        // P2-66: the RNG state is part of the save - after a load, the dice must
+        // continue with EXACTLY the same sequence the original game would have rolled
+        Game.instance.getRng().setSeed(777);
+        Game.instance.getRng().nextInt(); // advance the state a little
+        SaveController.saveGame("slot2", "rng-test");
+        int[] expectedRolls = new int[3];
+        for (int i = 0; i < 3; i++) expectedRolls[i] = Game.instance.getRng().nextInt(1000);
+        SaveController.loadGame("slot2");
+        user = Game.instance.getPlayersInGame().get(0);
+        nation = user.getNation();
+        boolean sameSequence = true;
+        for (int i = 0; i < 3; i++)
+            if (Game.instance.getRng().nextInt(1000) != expectedRolls[i]) sameSequence = false;
+        check("RNG state survives save/load (same dice after loading)", sameSequence);
+
         // autosave ran at the end of every nextGameTurn in the earlier tests
         check("autosave file exists after played turns",
                 new java.io.File(SaveController.saveDirectory, "autosave.sav").exists());
@@ -330,6 +719,19 @@ public class Phase2Driver {
 
         new java.io.File(SaveController.saveDirectory, "slot2.sav").delete();
         check("empty slot refused politely", SaveController.loadGame("slot2").contains("empty"));
+
+        // damaged file: garbage bytes -> marked DAMAGED in the list, refused, deletable
+        try (java.io.FileOutputStream out = new java.io.FileOutputStream(
+                new java.io.File(SaveController.saveDirectory, "slot3.sav"))) {
+            out.write("this is not a save file".getBytes());
+        } catch (Exception ignored) { }
+        check("damaged slot is marked DAMAGED in the slot list",
+                SaveController.describeSlot("slot3").contains("DAMAGED"));
+        check("loading a damaged slot is refused without crashing",
+                SaveController.loadGame("slot3").startsWith("Load FAILED"));
+        check("damaged slot can be deleted",
+                SaveController.deleteSlot("slot3").contains("deleted")
+                        && !new java.io.File(SaveController.saveDirectory, "slot3.sav").exists());
     }
 
     // ── 0. seasons: 10-turn cycle + winter movement penalty ──────────────────

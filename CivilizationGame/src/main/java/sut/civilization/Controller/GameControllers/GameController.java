@@ -93,10 +93,13 @@ public class GameController extends Controller {
                 LandController.initializeDistances();
             }
         }
-        System.out.println("DEBUG: nextGameTurn() called, turn is now " + Game.instance.getTurn());
-
         // phase 2 disasters: 5% chance at the start of every turn (P2-54)
         DisasterController.rollForDisaster();
+
+        // phase 2 combat: barbarians next to our stuff attack now (P2-17)
+        CombatController.enemyTurn();
+        // phase 2 bear attacks (P2-57): den spawns/despawns, bears roam and hunt
+        DisasterController.bearTurn();
 
         for (User user : Game.instance.getPlayersInGame()) {
             Nation nation = user.getNation();
@@ -145,8 +148,6 @@ public class GameController extends Controller {
             else if (!starving && nation.isInStarvation())
                 notifyTurn("Starvation is over.");
             nation.setInStarvation(starving);
-            System.out.println("DEBUG turn=" + Game.instance.getTurn() + " nation food balance="
-                    + nation.getFood().getBalance() + " starving=" + starving);
 
             // population growth stops while starving
             if (nation.getTownHall() != null) {

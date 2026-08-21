@@ -13,7 +13,10 @@ public enum TechnologyType {
     TECH_IRON_MINE(   "Iron Mine Technology",            4,       2,        0,       2,     1,       TECH_STONE_MINE),
     // Phase 2: Steel Tools - 1.5x output for stone/iron mines, needs Settlement (level 2)
     TECH_TOOLS(       "Steel Tools",                     0,       0,        40,      3,     2,       TECH_IRON_MINE),
-    TECH_TOWN(        "Town Construction Technology",    6,       4,        2,       2,     1,       null);
+    TECH_TOWN(        "Town Construction Technology",    6,       4,        2,       2,     1,       null),
+    // Phase 2 (P2-07): Defensive Architecture - needs Capital (level 3). Auto stone
+    // wall around the Town Hall, defense 10 -> 30, max HP cap raised to 350
+    TECH_DEFENSE(     "Defensive Architecture",          0,       100,      0,       4,     3,       null);
 
     public final String name;
     public final int woodCost;

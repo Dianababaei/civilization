@@ -170,6 +170,16 @@ public class MainController extends ViewController {
                 "Load Game", JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[0]);
         if (pick < 0) return;
 
+        // damaged slot: mark it and offer deletion instead of trying to load it
+        if (SaveController.isDamaged(slots[pick])) {
+            int del = JOptionPane.showConfirmDialog(parent,
+                    "The file in " + slots[pick] + " is damaged and cannot be loaded.\nDelete it?",
+                    "Damaged save", JOptionPane.YES_NO_OPTION, JOptionPane.ERROR_MESSAGE);
+            if (del == JOptionPane.YES_OPTION)
+                JOptionPane.showMessageDialog(parent, SaveController.deleteSlot(slots[pick]));
+            return;
+        }
+
         String message = SaveController.loadGame(slots[pick]);
         if (message.startsWith("Loaded")) {
             Game.instance.changeScene(Menus.GAME_MENU);

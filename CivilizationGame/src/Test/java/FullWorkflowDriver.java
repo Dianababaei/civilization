@@ -53,6 +53,8 @@ public class FullWorkflowDriver {
     static void setup() {
         // random 5%-per-turn earthquakes would make this driver flaky
         DisasterController.randomDisastersEnabled = false;
+        // roaming den bears would eat this driver's workers mid-scenario
+        DisasterController.bearDenEnabled = false;
         // keep test autosaves away from the player's real saves/ folder
         SaveController.saveDirectory = "target/test-saves";
         user = new User("player", "", "Player");

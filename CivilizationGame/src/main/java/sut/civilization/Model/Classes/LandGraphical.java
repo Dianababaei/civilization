@@ -46,6 +46,7 @@ public class LandGraphical extends JComponent {
     private Image resourceImage;
     private Image ironImage;
     private Image civilizedUnitImage;
+    private Image enemyImage;
     private Image improvementImage;
     private Image townHallImage;
     private Image fogImage;
@@ -54,6 +55,10 @@ public class LandGraphical extends JComponent {
     private boolean resourceDepleted = false;
     private boolean ironDepleted = false;
     private boolean ownedByCurrentNation = false;
+    /** P2-07: this is a Town Hall tile whose nation researched Defensive Architecture. */
+    private boolean hasStoneWall = false;
+    /** P2-57: this forest hex is the bear den. */
+    private boolean isBearDen = false;
     /** For each of the 6 edges (edge i = LOCAL_HEX vertex i to vertex i+1), whether that
      *  side faces a hex NOT owned by the current nation and therefore needs a border drawn. */
     private final boolean[] frontierEdge = new boolean[6];
@@ -223,17 +228,41 @@ public class LandGraphical extends JComponent {
                     .append(", AP ").append(occupant.getCurrentAp()).append("/").append(occupant.getMaxAp()).append(")");
         } else civilizedUnitImage = null;
 
+        // phase 2 combat: hostile occupant with HP right on the tooltip
+        if (land.getEnemy() != null) {
+            Enemy enemy = land.getEnemy();
+            enemyImage = loadImage("/sut/civilization/Images/units/" + enemy.getType().name + ".png");
+            landInfo.append("\nENEMY: ").append(enemy.getType().name)
+                    .append(" (HP ").append(enemy.getHp()).append("/").append(enemy.getType().maxHp).append(")");
+            if (enemy.getType() == sut.civilization.Model.ModulEnums.EnemyType.CAMP) {
+                landInfo.append(enemy.hasLivingGuard()
+                        ? " - guarded (guard HP " + enemy.getGuardHp() + "/" + Enemy.CAMP_GUARD_HP + "), kill the guard first"
+                        : " - guard is dead, the structure can be attacked now");
+            } else {
+                landInfo.append(" - attacks your units/Town Hall next to it every turn!");
+            }
+        } else enemyImage = null;
+
+        // phase 2 bear attacks (P2-57): mark the den forest
+        isBearDen = coordinate.equals(Game.instance.bearDen);
+        if (isBearDen)
+            landInfo.append("\nBEAR DEN - a bear comes out when your units get within 3 hexes!");
+
         boolean isTownHallTile = false;
+        hasStoneWall = false;
         for (User u : Game.instance.getPlayersInGame()) {
             Nation n = u.getNation();
             if (n != null && n.getTownHall() != null && n.getTownHall().getMainLand() == land) {
                 isTownHallTile = true;
+                hasStoneWall = n.getTownHall().hasStoneWall();
                 break;
             }
         }
         if (isTownHallTile) {
             townHallImage = loadImage("/sut/civilization/Images/tiles/TownHall.png");
             landInfo.append("\nTown Hall");
+            if (hasStoneWall)
+                landInfo.append("\nStone Wall (Defensive Architecture): defense 30, max HP 350");
         } else townHallImage = null;
 
         if (land.getImprovement() != null) {
@@ -433,6 +462,54 @@ public class LandGraphical extends JComponent {
                 g2.setColor(new Color(0x0c3d1e));
                 g2.drawOval(dotX, dotY, dotSize, dotSize);
             }
+        }
+
+        // phase 2 bear attacks: the den is a dark cave mouth at the foot of the forest
+        if (isBearDen) {
+            int cw = (int) (tileRadius * 0.55), ch = (int) (tileRadius * 0.4);
+            int cxDen = cx - cw / 2, cyDen = cy + (int) (tileRadius * 0.25);
+            g2.setColor(new Color(0x2b1d10));
+            g2.fillArc(cxDen, cyDen, cw, ch, 0, 180);
+            g2.setColor(new Color(0x6b4a26));
+            g2.setStroke(new java.awt.BasicStroke(4f));
+            g2.drawArc(cxDen, cyDen, cw, ch, 0, 180);
+        }
+
+        // phase 2 combat: enemies draw with a red ring underneath so a hostile hex is
+        // unmistakable even when its sprite resembles one of our own units
+        if (enemyImage != null) {
+            int s = (int) (tileRadius * 0.55);
+            int ex = cx + (int) (tileRadius * 0.05);
+            int ey = cy - s / 2;
+            g2.setColor(new Color(200, 30, 30, 160));
+            g2.fillOval(ex - 5, ey - 5, s + 10, s + 10);
+            g2.drawImage(enemyImage, ex, ey, s, s, this);
+        }
+
+        // P2-07: the automatic stone wall - a ring of gray "stones" just inside the
+        // hex border so the walled Town Hall is obvious at a glance
+        if (hasStoneWall) {
+            java.awt.Stroke oldStroke = g2.getStroke();
+            int[] xs = LOCAL_HEX.xpoints;
+            int[] ys = LOCAL_HEX.ypoints;
+            // shrink the hex ~15% toward the center so the wall sits inside the border
+            g2.setStroke(new java.awt.BasicStroke(11f, java.awt.BasicStroke.CAP_ROUND, java.awt.BasicStroke.JOIN_ROUND));
+            g2.setColor(new Color(0x4a4a4a));
+            for (int i = 0; i < 6; i++) {
+                int next = (i + 1) % 6;
+                g2.drawLine(cx + (int) ((xs[i] - cx) * 0.85), cy + (int) ((ys[i] - cy) * 0.85),
+                        cx + (int) ((xs[next] - cx) * 0.85), cy + (int) ((ys[next] - cy) * 0.85));
+            }
+            // dashed light-gray pass on top reads as individual stone blocks
+            g2.setStroke(new java.awt.BasicStroke(7f, java.awt.BasicStroke.CAP_BUTT,
+                    java.awt.BasicStroke.JOIN_ROUND, 1f, new float[]{14f, 8f}, 0f));
+            g2.setColor(new Color(0xb8b8b8));
+            for (int i = 0; i < 6; i++) {
+                int next = (i + 1) % 6;
+                g2.drawLine(cx + (int) ((xs[i] - cx) * 0.85), cy + (int) ((ys[i] - cy) * 0.85),
+                        cx + (int) ((xs[next] - cx) * 0.85), cy + (int) ((ys[next] - cy) * 0.85));
+            }
+            g2.setStroke(oldStroke);
         }
 
         if (townHallImage != null) {

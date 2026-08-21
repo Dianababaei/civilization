@@ -74,7 +74,8 @@ public enum CivilizedUnitType {
                 this.actions = new UnitActions[]{UnitActions.MOVE, UnitActions.FOUND_CITY, UnitActions.SLEEP, UnitActions.WAKE};
                 break;
             default:
-                this.actions = new UnitActions[]{UnitActions.MOVE, UnitActions.SLEEP, UnitActions.WAKE};
+                // the military units (P2-14: they are the only ones who can attack)
+                this.actions = new UnitActions[]{UnitActions.MOVE, UnitActions.ATTACK, UnitActions.SLEEP, UnitActions.WAKE};
         }
     }
 }

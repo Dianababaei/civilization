@@ -16,6 +16,7 @@ public class CheatController extends GameController {
 
         Land tile = Game.instance.map[coord.x][coord.y];
         if (tile.getCivilizedUnit() != null) return "A unit is already on this tile!";
+        if (tile.getEnemy() != null) return "An enemy is on this tile!";
 
         // defaults to spawning an explorer
         CivilizedUnit unit = new CivilizedUnit(
@@ -39,6 +40,7 @@ public class CheatController extends GameController {
 
         Land tile = Game.instance.map[coord.x][coord.y];
         if (tile.getCivilizedUnit() != null) return "A unit is already on this tile!";
+        if (tile.getEnemy() != null) return "An enemy is on this tile!";
 
         CivilizedUnit unit = new CivilizedUnit(type, currentTurnUser.getNation(), coord);
         tile.setCivilizedUnit(unit);
@@ -121,7 +123,7 @@ public class CheatController extends GameController {
             for (int i = 0; i < Consts.MAP_SIZE.amount.x && n.getUnits().size() < cap; i++) {
                 for (int j = 0; j < Consts.MAP_SIZE.amount.y && n.getUnits().size() < cap; j++) {
                     Land tile = Game.instance.map[i][j];
-                    if (tile.getCivilizedUnit() != null) continue;
+                    if (tile.getCivilizedUnit() != null || tile.getEnemy() != null) continue;
                     if (tile.getLandType() == LandType.MOUNTAIN || tile.getLandType() == LandType.MOUNTAIN_RANGE) continue;
                     if (tile.getVisibility() == 0) continue;
                     if (pass == 0 && !n.ownsHex(i, j)) continue;
@@ -156,8 +158,35 @@ public class CheatController extends GameController {
             for (int j = 0; j < Consts.MAP_SIZE.amount.y; j++)
                 if (Game.instance.map[i][j].getVisibility() == 2) visible.add(new Pair<>(i, j));
         if (visible.isEmpty()) return "No visible hex to strike!";
-        Pair<Integer, Integer> center = visible.get(new java.util.Random().nextInt(visible.size()));
+        Pair<Integer, Integer> center = visible.get(Game.instance.getRng().nextInt(visible.size()));
         return DisasterController.triggerEarthquake(center);
+    }
+
+    // spawns an enemy (Barbarian / Bear / Camp) on the nearest free visible tile to the
+    // Town Hall, so a combat demo starts right at home instead of across the map
+    public static String debugSpawnEnemy(String kind) {
+        EnemyType type = null;
+        for (EnemyType t : EnemyType.values())
+            if (t.name().equalsIgnoreCase(kind) || t.name.equalsIgnoreCase(kind)) { type = t; break; }
+        if (type == null) return "Unknown enemy type: " + kind + "!";
+
+        TownHall th = currentTurnUser.getNation().getTownHall();
+        Pair<Integer, Integer> center = th != null
+                ? new Pair<>(th.getMainLand().getI(), th.getMainLand().getJ())
+                : new Pair<>(7, 7);
+        for (int radius = 1; radius <= 6; radius++) {
+            for (Pair<Integer, Integer> hex : DisasterController.hexesInRadius(center, radius)) {
+                if (!Pair.isValid(hex) || hex.equals(center)) continue;
+                Land tile = Game.instance.map[hex.x][hex.y];
+                if (tile.getLandType() == LandType.MOUNTAIN || tile.getLandType() == LandType.MOUNTAIN_RANGE) continue;
+                if (tile.getCivilizedUnit() != null || tile.getEnemy() != null || tile.getImprovement() != null) continue;
+                if (tile.getVisibility() != 2) continue;
+                tile.setEnemy(new Enemy(type, hex));
+                return type.name + " spawned at (" + hex.x + "," + hex.y + ")"
+                        + (type == EnemyType.CAMP ? " - kill its guard first, then hit the structure." : ".");
+            }
+        }
+        return "No free visible tile near the Town Hall to spawn on!";
     }
 
     // reveals the whole map for the current player (marks tiles as explorer-seen too,

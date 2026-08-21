@@ -33,6 +33,8 @@ public class UnitController extends GameController {
         int destNum = LandController.getLandNumber(dest);
         if (dest.getCivilizedUnit() != null)
             return "There already is a civilized unit in destination!";
+        if (dest.getEnemy() != null)
+            return "An enemy holds that hex - attack it instead of walking into it!";
         if (Game.instance.dist[originNum][destNum] < 1000) {
             selectedUnit.setPath(Game.instance.path[originNum][destNum]);
         } else
@@ -63,6 +65,14 @@ public class UnitController extends GameController {
         // there since then, so we double check only on the last step
         boolean isFinalStep = path.length() <= 1;
         CivilizedUnit occupant = Game.instance.map[next.x][next.y].getCivilizedUnit();
+        // an enemy that appeared on the destination since the path was queued also blocks it
+        if (isFinalStep && occupant == null && Game.instance.map[next.x][next.y].getEnemy() != null) {
+            unit.setPath("");
+            unit.setUnitStatus(UnitStatus.AWAKE);
+            lastStepBlocked = true;
+            lastBlockedHex = next;
+            return;
+        }
         if (isFinalStep && occupant != null) {
             unit.setPath("");
             unit.setUnitStatus(UnitStatus.AWAKE);
@@ -82,7 +92,6 @@ public class UnitController extends GameController {
             Game.instance.map[next.x][next.y].setCivilizedUnit((CivilizedUnit) unit);
         }
         unit.setLocation(next);
-        System.out.println("DEBUG: unit moved to (" + next.x + "," + next.y + ") mp left=" + unit.getMP());
 
         if (Game.instance.map[next.x][next.y].getRuin() != null) {
             unitRetrieveRuin(unit);

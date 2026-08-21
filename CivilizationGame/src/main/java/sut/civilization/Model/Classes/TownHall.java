@@ -172,9 +172,25 @@ public class TownHall implements java.io.Serializable {
         ownerNation.upgradeStorageCapacity(LEVEL_UP_STORAGE_BONUS);
     }
 
-    // ── HP ────────────────────────────────────────────────────────────────────
+    // ── HP & defense ──────────────────────────────────────────────────────────
 
-    public int getMaxHp() { return BASE_MAX_HP + (level - 1) * MAX_HP_PER_LEVEL; }
+    // Phase 2 (P2-07): Defensive Architecture raises the HP cap to a flat 350
+    public static final int WALLED_MAX_HP = 350;
+    public static final int BASE_DEFENSE = 10;
+    public static final int WALLED_DEFENSE = 30;
+
+    public boolean hasStoneWall() {
+        return ownerNation != null && ownerNation.hasTechnology(TechnologyType.TECH_DEFENSE);
+    }
+
+    public int getMaxHp() {
+        if (hasStoneWall()) return WALLED_MAX_HP;
+        return BASE_MAX_HP + (level - 1) * MAX_HP_PER_LEVEL;
+    }
+
+    /** Soaked off every enemy attack against the Town Hall (attacks still chip at least 1). */
+    public int getDefense() { return hasStoneWall() ? WALLED_DEFENSE : BASE_DEFENSE; }
+
     public int getHp() { return hp; }
     public void setHp(int hp) { this.hp = Math.max(0, Math.min(getMaxHp(), hp)); }
 
