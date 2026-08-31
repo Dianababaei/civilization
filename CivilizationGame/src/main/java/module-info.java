@@ -1,5 +1,6 @@
 open module sut.civilization {
     requires java.desktop;
+    requires com.google.gson;
 
     exports sut.civilization.Model.Classes;
 
@@ -10,4 +11,10 @@ open module sut.civilization {
     exports sut.civilization.Enums;
 
     exports sut.civilization;
+
+    exports sut.civilization.Network.Messages;
+
+    exports sut.civilization.Network.Server;
+
+    exports sut.civilization.Network.Client;
 }

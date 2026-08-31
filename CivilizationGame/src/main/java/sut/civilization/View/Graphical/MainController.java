@@ -49,10 +49,11 @@ public class MainController extends ViewController {
 
         JButton startButton = styledButton("Start");
         JButton loadButton = styledButton("Load Game");
+        JButton multiplayerButton = styledButton("Multiplayer");
         JButton settingsButton = styledButton("Settings");
         JButton exitButton = styledButton("Exit");
 
-        for (JButton b : new JButton[]{startButton, loadButton, settingsButton, exitButton}) {
+        for (JButton b : new JButton[]{startButton, loadButton, multiplayerButton, settingsButton, exitButton}) {
             b.setAlignmentX(Component.CENTER_ALIGNMENT);
             b.setMaximumSize(new Dimension(220, 45));
             centerPanel.add(Box.createVerticalStrut(15));
@@ -86,6 +87,7 @@ public class MainController extends ViewController {
 
         startButton.addActionListener(e -> onStart());
         loadButton.addActionListener(e -> onLoad(root));
+        multiplayerButton.addActionListener(e -> sut.civilization.Network.Client.MultiplayerMenu.open(root));
         settingsButton.addActionListener(e -> onSettings());
         exitButton.addActionListener(e -> onExit(root));
 
