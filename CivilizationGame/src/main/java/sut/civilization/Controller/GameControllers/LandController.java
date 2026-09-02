@@ -127,9 +127,116 @@ public class LandController extends Controller {
         return -1;
     }
 
+    // ── Phase 3: named multiplayer maps ───────────────────────────────────────
+    // "pre-designed" maps are fixed seeds into the same generator: the same name
+    // always produces the exact same terrain, which is what map selection in the
+    // lobby needs. Spawn slots sit symmetrically so no player starts closer to an
+    // opponent than the others (P3-03).
+
+    public static long seedForMap(String mapName) {
+        switch (mapName) {
+            case "Green Valley": return 20261L;
+            case "Twin Rivers":  return 20262L;
+            case "Iron Ridge":   return 20263L;
+            default:             return mapName.hashCode();
+        }
+    }
+
+    public static ArrayList<Pair<Integer, Integer>> multiplayerSpawns(int playerCount) {
+        ArrayList<Pair<Integer, Integer>> slots = new ArrayList<>();
+        slots.add(new Pair<>(3, 3));
+        slots.add(new Pair<>(11, 11));
+        slots.add(new Pair<>(11, 3));
+        slots.add(new Pair<>(3, 11));
+        return new ArrayList<>(slots.subList(0, Math.min(playerCount, slots.size())));
+    }
+
+    public static Land[][] mapInitializerMultiplayer(String mapName, ArrayList<User> players) {
+        // spec flow: players start with civil units only and TRAIN their army
+        // through the Town Hall (TrainUnitRequest); no free military at spawn
+        ArrayList<Pair<Integer, Integer>> spawns = multiplayerSpawns(players.size());
+        Land[][] map = mapInitializer(new Random(seedForMap(mapName)), players, spawns);
+        // P3-04: every start must be FAIR - open ground to build on plus stone and
+        // iron within reach, no matter what the seed rolled for that corner
+        for (Pair<Integer, Integer> spawn : spawns) ensureFairStartingArea(map, spawn);
+        return map;
+    }
+
+    /**
+     * Phase 3 map fairness (P3-04): a corner spawn must never be crippled by seed
+     * luck. Deterministic (no RNG), so named maps stay identical on every load:
+     *  - at least 6 open tiles (plain/meadow/forest) within radius 2, by
+     *    flattening excess mountains closest-first;
+     *  - at least one stone mountain within radius 3;
+     *  - at least one iron deposit within radius 3.
+     */
+    static void ensureFairStartingArea(Land[][] map, Pair<Integer, Integer> spawn) {
+        ArrayList<Pair<Integer, Integer>> reserved = new ArrayList<>();
+        reserved.add(spawn);
+        reserved.addAll(getAllNeighborsIndexes(spawn)); // kept for food/forest/starting units
+
+        // 1) open working area: flatten mountains near the spawn until there is room
+        int open = 0;
+        ArrayList<Pair<Integer, Integer>> ring2 = DisasterController.hexesInRadius(spawn, 2);
+        for (Pair<Integer, Integer> hex : ring2) {
+            if (!Pair.isValid(hex) || hex.equals(spawn)) continue;
+            LandType lt = map[hex.x][hex.y].getLandType();
+            if (lt == LandType.PLAIN || lt == LandType.MEADOW || lt == LandType.FOREST) open++;
+        }
+        for (Pair<Integer, Integer> hex : ring2) {
+            if (open >= 6) break;
+            if (!Pair.isValid(hex) || hex.equals(spawn)) continue;
+            Land tile = map[hex.x][hex.y];
+            if (tile.getLandType() == LandType.MOUNTAIN || tile.getLandType() == LandType.MOUNTAIN_RANGE) {
+                tile.setLandType(LandType.PLAIN);
+                tile.setResource(null);
+                tile.setHasIron(false);
+                tile.setIronResource(null);
+                open++;
+            }
+        }
+
+        // 2) guaranteed stone and iron within radius 3
+        ArrayList<Pair<Integer, Integer>> ring3 = DisasterController.hexesInRadius(spawn, 3);
+        Land firstMountain = null;
+        boolean ironNearby = false;
+        for (Pair<Integer, Integer> hex : ring3) {
+            if (!Pair.isValid(hex)) continue;
+            Land tile = map[hex.x][hex.y];
+            if (tile.getLandType() != LandType.MOUNTAIN) continue;
+            if (firstMountain == null) firstMountain = tile;
+            if (tile.hasIron()) ironNearby = true;
+        }
+        if (firstMountain == null) {
+            // raise one mountain on the first free plain/meadow outside the reserved ring
+            for (Pair<Integer, Integer> hex : ring3) {
+                if (!Pair.isValid(hex) || reserved.contains(hex)) continue;
+                Land tile = map[hex.x][hex.y];
+                if (tile.getLandType() != LandType.PLAIN && tile.getLandType() != LandType.MEADOW) continue;
+                if (tile.getCivilizedUnit() != null) continue;
+                tile.setLandType(LandType.MOUNTAIN);
+                tile.setResource(new Resource(ResourceType.STONE));
+                firstMountain = tile;
+                break;
+            }
+        }
+        if (!ironNearby && firstMountain != null) {
+            firstMountain.setHasIron(true);
+            firstMountain.setIronResource(new Resource(ResourceType.IRON));
+        }
+    }
+
+    /** Single-player path, exactly as before: random seed, one spawn at the map middle. */
     public static Land[][] mapInitializer() {
+        ArrayList<Pair<Integer, Integer>> spawns = new ArrayList<>();
+        spawns.add(new Pair<>(7, 7));
+        return mapInitializer(new Random(Double.doubleToLongBits(Math.random())),
+                Game.instance.getPlayersInGame(), spawns);
+    }
+
+    static Land[][] mapInitializer(Random random, ArrayList<User> players,
+                                   ArrayList<Pair<Integer, Integer>> spawns) {
         Land[][] map = new Land[Consts.MAP_SIZE.amount.x][Consts.MAP_SIZE.amount.y];
-        Random random = new Random(Double.doubleToLongBits(Math.random()));
         LandType[] walkable = { LandType.FOREST, LandType.PLAIN, LandType.MEADOW };
 
         for (int i = 0; i < Consts.MAP_SIZE.amount.x; i++) {
@@ -146,15 +253,18 @@ public class LandController extends Controller {
         }
 
         // phase 2: about a third of the mountains become Mountain Ranges - fully
-        // impassable, no stone/iron, nothing buildable. never right next to the town
-        // hall (fixed at 7,7) so the starting area always stays open. this runs BEFORE
+        // impassable, no stone/iron, nothing buildable. never on or right next to a
+        // spawn spot so every starting area always stays open. this runs BEFORE
         // resource assignment so ranges simply never get a stone deposit
-        Pair<Integer, Integer> thSpot = new Pair<>(7, 7);
-        ArrayList<Pair<Integer, Integer>> thRing = getAllNeighborsIndexes(thSpot);
+        ArrayList<Pair<Integer, Integer>> protectedSpots = new ArrayList<>();
+        for (Pair<Integer, Integer> spawn : spawns) {
+            protectedSpots.add(spawn);
+            protectedSpots.addAll(getAllNeighborsIndexes(spawn));
+        }
         for (int i = 0; i < Consts.MAP_SIZE.amount.x; i++) {
             for (int j = 0; j < Consts.MAP_SIZE.amount.y; j++) {
                 if (map[i][j].getLandType() != LandType.MOUNTAIN) continue;
-                if ((i == thSpot.x && j == thSpot.y) || thRing.contains(new Pair<>(i, j))) continue;
+                if (protectedSpots.contains(new Pair<>(i, j))) continue;
                 if (random.nextInt(3) == 0) map[i][j].setLandType(LandType.MOUNTAIN_RANGE);
             }
         }
@@ -179,66 +289,72 @@ public class LandController extends Controller {
             }
         }
 
-        // spawn starting units for player 0 (this is single-player only for now)
-        // start is 1 explorer + 2 builders + 2 workers
-        Nation player0Nation = Game.instance.getPlayersInGame().get(0).getNation();
+        // set up every player's starting area the same way (single-player = one spawn
+        // at the middle, multiplayer = one symmetric spawn slot per player).
+        // start is 1 explorer + 2 builders + 2 workers around the town hall
+        for (int p = 0; p < players.size() && p < spawns.size(); p++) {
+            Nation nation = players.get(p).getNation();
+            Pair<Integer, Integer> thCoord = spawns.get(p);
 
-        // town hall goes near the middle of the 15x15 map
-        Land townHallLand = map[7][7];
-        TownHall townHall = new TownHall(player0Nation, townHallLand);
-        player0Nation.setTownHall(townHall);
-        // town hall tile + its neighbors count as player territory
-        Pair<Integer, Integer> thCoord = new Pair<>(7, 7);
-        player0Nation.addToTerritory(thCoord);
-        for (Pair<Integer, Integer> neighbor : getAllNeighborsIndexes(thCoord)) {
-            if (Pair.isValid(neighbor)) player0Nation.addToTerritory(neighbor);
-        }
+            Land townHallLand = map[thCoord.x][thCoord.y];
+            TownHall townHall = new TownHall(nation, townHallLand);
+            nation.setTownHall(townHall);
+            // town hall tile + its neighbors count as player territory
+            nation.addToTerritory(thCoord);
+            for (Pair<Integer, Integer> neighbor : getAllNeighborsIndexes(thCoord)) {
+                if (Pair.isValid(neighbor)) nation.addToTerritory(neighbor);
+            }
 
-        // random terrain can roll a starting area with zero food tiles, which would make
-        // farm/stable impossible to build near the capital. force at least one neighbor
-        // into each type (without touching the town hall tile itself)
-        ensureStartingFoodTiles(map, thCoord);
-        // same deal for lumber mill - make sure at least one neighbor is forest
-        ensureStartingForestTile(map, thCoord);
-        // phase 2: mountain ranges must never wall the town hall in - demote ranges
-        // until every normal tile on the map can be reached from the town hall
-        ensureTownHallNotEnclosed(map, thCoord);
-        // town hall + neighbors are visible right from the start.
-        // also counts as "explored" for border expander (it's the player's known starting
-        // area, not something a unit happened to walk past)
-        map[thCoord.x][thCoord.y].setVisibility(2);
-        map[thCoord.x][thCoord.y].addSeerNation(player0Nation);
-        map[thCoord.x][thCoord.y].addExplorerSeenNation(player0Nation);
-        for (Pair<Integer, Integer> nb : getAllNeighborsIndexes(thCoord)) {
-            if (Pair.isValid(nb)) {
-                map[nb.x][nb.y].setVisibility(2);
-                map[nb.x][nb.y].addSeerNation(player0Nation);
-                map[nb.x][nb.y].addExplorerSeenNation(player0Nation);
+            // random terrain can roll a starting area with zero food tiles, which would make
+            // farm/stable impossible to build near the capital. force at least one neighbor
+            // into each type (without touching the town hall tile itself). running these per
+            // spawn is also the "fair access to all 4 resources" rule of phase 3 (P3-04)
+            ensureStartingFoodTiles(map, thCoord);
+            // same deal for lumber mill - make sure at least one neighbor is forest
+            ensureStartingForestTile(map, thCoord);
+            // phase 2: mountain ranges must never wall the town hall in - demote ranges
+            // until every normal tile on the map can be reached from the town hall
+            ensureTownHallNotEnclosed(map, thCoord);
+            // town hall + neighbors are visible right from the start.
+            // also counts as "explored" for border expander (it's the player's known starting
+            // area, not something a unit happened to walk past)
+            map[thCoord.x][thCoord.y].setVisibility(2);
+            map[thCoord.x][thCoord.y].addSeerNation(nation);
+            map[thCoord.x][thCoord.y].addExplorerSeenNation(nation);
+            for (Pair<Integer, Integer> nb : getAllNeighborsIndexes(thCoord)) {
+                if (Pair.isValid(nb)) {
+                    map[nb.x][nb.y].setVisibility(2);
+                    map[nb.x][nb.y].addSeerNation(nation);
+                    map[nb.x][nb.y].addExplorerSeenNation(nation);
+                }
+            }
+
+            // put starting units on tiles next to town hall (not on the town hall tile itself)
+            int[][] startOffsets = { {-1,-1}, {-1,0}, {0,-1}, {0,1}, {1,0} };
+            CivilizedUnitType[] startTypes = {
+                CivilizedUnitType.EXPLORER,
+                CivilizedUnitType.BUILDER,
+                CivilizedUnitType.BUILDER,
+                CivilizedUnitType.WORKER,
+                CivilizedUnitType.WORKER
+            };
+            for (int s = 0; s < startTypes.length; s++) {
+                Pair<Integer, Integer> loc = new Pair<>(thCoord.x + startOffsets[s][0], thCoord.y + startOffsets[s][1]);
+                // skip if out of bounds or something's already there
+                if (!Pair.isValid(loc) || map[loc.x][loc.y].getCivilizedUnit() != null) continue;
+                CivilizedUnit unit = new CivilizedUnit(startTypes[s], nation, loc);
+                map[loc.x][loc.y].setCivilizedUnit(unit);
+                nation.getUnits().add(unit);
             }
         }
+        Pair<Integer, Integer> thCoord = spawns.get(0);
 
-        // put starting units on tiles next to town hall (not on the town hall tile itself)
-        int[][] startSlots = { {6,6}, {6,7}, {7,6}, {7,8}, {8,7} };
-        CivilizedUnitType[] startTypes = {
-            CivilizedUnitType.EXPLORER,
-            CivilizedUnitType.BUILDER,
-            CivilizedUnitType.BUILDER,
-            CivilizedUnitType.WORKER,
-            CivilizedUnitType.WORKER
-        };
-        for (int s = 0; s < startTypes.length; s++) {
-            Pair<Integer, Integer> loc = new Pair<>(startSlots[s][0], startSlots[s][1]);
-            // skip if out of bounds or something's already there
-            if (!Pair.isValid(loc) || map[loc.x][loc.y].getCivilizedUnit() != null) continue;
-            CivilizedUnit unit = new CivilizedUnit(startTypes[s], player0Nation, loc);
-            map[loc.x][loc.y].setCivilizedUnit(unit);
-            player0Nation.getUnits().add(unit);
-        }
-
+        // ruins use the same seeded random as everything else so the named
+        // multiplayer maps come out identical on every machine (phase 3)
         for (int i1 = 0; i1 < Consts.MAP_SIZE.amount.x; i1++) {
             for (int j = 0; j < Consts.MAP_SIZE.amount.y; j++) {
                 Land land = map[i1][j];
-                int chance = new Random().nextInt(10);
+                int chance = random.nextInt(10);
                 if (chance <= 1 && land.getLandType() != LandType.MOUNTAIN
                         && land.getLandType() != LandType.MOUNTAIN_RANGE && land.getCivilizedUnit() == null)
                     land.setRuin(new Ruin());

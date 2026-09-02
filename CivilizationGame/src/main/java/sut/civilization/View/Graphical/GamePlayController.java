@@ -11,6 +11,7 @@ import sut.civilization.Enums.Consts;
 import sut.civilization.Enums.Menus;
 import sut.civilization.Model.Classes.*;
 import sut.civilization.Model.ModulEnums.*;
+import sut.civilization.Network.Client.MultiplayerSession;
 
 import javax.swing.*;
 import javax.swing.Timer;
@@ -64,7 +65,23 @@ public class GamePlayController extends ViewController {
     }
 
     private JPanel createPanel() {
+        // phase 3: multiplayer rebuilds this screen on every server snapshot. The old
+        // screen's floating unit popup must die with it, and the CAMERA (zoom +
+        // scroll position) must carry over - otherwise every server update yanks
+        // the player back to a default view of the map middle, which between two
+        // corner spawns is nothing but fog
+        int keepZoom = -1;
+        java.awt.Point keepView = null;
+        if (gamePlayController != null) {
+            gamePlayController.hideUnitPopup();
+            if (MultiplayerSession.isActive() && gamePlayController.mapScrollPane != null) {
+                keepZoom = gamePlayController.zoomIndex;
+                keepView = gamePlayController.mapScrollPane.getViewport().getViewPosition();
+            }
+        }
         gamePlayController = this;
+        if (keepZoom >= 0) zoomIndex = keepZoom;
+        final java.awt.Point restoredView = keepView;
 
         root = new JPanel(null);
         root.setBackground(new Color(0x1e1e1e));
@@ -89,11 +106,36 @@ public class GamePlayController extends ViewController {
         mapBaseSize = new Dimension(maxX + 100, maxY + 100);
         mapPane.setPreferredSize(mapBaseSize);
 
-        mapScrollPane = new JScrollPane(mapPane);
+        // the whole map often FITS the window (fullscreen at zoom 1.0). A plain
+        // JScrollPane pins a smaller-than-viewport view to the top-left corner,
+        // which looks broken for corner spawns: base glued to the screen corner,
+        // black band on the right. This holder centers the map instead whenever
+        // there is spare room, and scrolls normally when there is not
+        JPanel mapHolder = new JPanel(new GridBagLayout());
+        mapHolder.setBackground(new Color(0x0d0d0d));
+        mapHolder.add(mapPane);
+        mapScrollPane = new JScrollPane(mapHolder);
+        // stretch the holder to fill the viewport whenever it is larger than the
+        // map, so the GridBagLayout above actually gets room to center in
+        mapScrollPane.getViewport().addChangeListener(e -> {
+            Dimension view = mapScrollPane.getViewport().getExtentSize();
+            Dimension mapSize = mapPane.getPreferredSize();
+            Dimension wanted = new Dimension(
+                    Math.max(view.width, mapSize.width), Math.max(view.height, mapSize.height));
+            if (!wanted.equals(mapHolder.getPreferredSize())) {
+                mapHolder.setPreferredSize(wanted);
+                mapHolder.revalidate();
+            }
+        });
         mapScrollPane.getVerticalScrollBar().setUnitIncrement(30);
         mapScrollPane.getHorizontalScrollBar().setUnitIncrement(30);
 
         JPanel centerWrapper = new JPanel(new BorderLayout());
+        // the HUD bar is an overlay painted ON TOP of the map area - start the map
+        // viewport below it, otherwise the top row of tiles hides under the HUD
+        // whenever the view is scrolled all the way up (corner spawns always are)
+        centerWrapper.setBorder(BorderFactory.createEmptyBorder(50, 0, 0, 0));
+        centerWrapper.setBackground(new Color(0x1e1e1e));
         centerWrapper.add(mapScrollPane, BorderLayout.CENTER);
         centerWrapper.setBounds(0, 0, 1366, 768);
         layeredRoot.add(centerWrapper, JLayeredPane.DEFAULT_LAYER);
@@ -113,6 +155,14 @@ public class GamePlayController extends ViewController {
         buildBottomPanels();
         buildZoomControls();
 
+        // a restored (or non-default) zoom level must actually rescale the tiles,
+        // which were all constructed at scale 1.0 above
+        if (zoomIndex != 2) applyZoom();
+
+        // the default 1.5s hover delay makes tile tooltips ("Unexplored", terrain
+        // info, disabled-button reasons) feel like they don't exist
+        ToolTipManager.sharedInstance().setInitialDelay(300);
+
         root.addComponentListener(new java.awt.event.ComponentAdapter() {
             @Override
             public void componentResized(java.awt.event.ComponentEvent e) {
@@ -129,15 +179,32 @@ public class GamePlayController extends ViewController {
 
         updateHud();
 
-        // Center the initial view on the Town Hall's starting area. The scrollbars' real
-        // extents aren't known until the viewport has been laid out, so defer past one
-        // extra paint cycle rather than a single invokeLater (which can still race layout).
+        // Position the initial view. The scrollbars' real extents aren't known until
+        // the viewport has been laid out, so defer past one extra paint cycle rather
+        // than a single invokeLater (which can still race layout).
         SwingUtilities.invokeLater(() -> SwingUtilities.invokeLater(() -> {
             mapScrollPane.revalidate();
+            if (restoredView != null) {
+                // multiplayer rebuild: exactly where the player was looking before
+                mapScrollPane.getViewport().setViewPosition(restoredView);
+                return;
+            }
             JScrollBar hbar = mapScrollPane.getHorizontalScrollBar();
             JScrollBar vbar = mapScrollPane.getVerticalScrollBar();
-            hbar.setValue((int) (hbar.getMaximum() * 0.45));
-            vbar.setValue((int) (vbar.getMaximum() * 0.45));
+            TownHall myTownHall = MultiplayerSession.isActive()
+                    ? Game.instance.getLoggedInUser().getNation().getTownHall() : null;
+            if (myTownHall != null) {
+                // multiplayer first build: open on YOUR corner, not the fogged middle
+                double zoom = ZOOM_LEVELS[zoomIndex];
+                Pair<Double, Double> c = graphicalMap[myTownHall.getMainLand().getI()]
+                        [myTownHall.getMainLand().getJ()].getCenterCoordinate();
+                hbar.setValue(Math.max(0, (int) (c.x * zoom - mapScrollPane.getViewport().getWidth() / 2.0)));
+                vbar.setValue(Math.max(0, (int) (c.y * zoom - mapScrollPane.getViewport().getHeight() / 2.0)));
+            } else {
+                // single player spawns mid-map
+                hbar.setValue((int) (hbar.getMaximum() * 0.45));
+                vbar.setValue((int) (vbar.getMaximum() * 0.45));
+            }
         }));
 
         // Ctrl+Scroll steps through ZOOM_LEVELS; plain scroll falls through to the scroll pane's
@@ -195,6 +262,35 @@ public class GamePlayController extends ViewController {
         hud.add(starvationLabel);
         hud.add(buildingWarningLabel);
 
+        // phase 3: whose turn it is must be visible at any moment (the whole screen
+        // is rebuilt on every server snapshot, so this label is always fresh)
+        if (MultiplayerSession.isActive()) {
+            JLabel mpTurnLabel = hudLabel();
+            if (MultiplayerSession.isMyTurn()) {
+                mpTurnLabel.setText("YOUR TURN");
+                mpTurnLabel.setForeground(new Color(0x9acd68));
+            } else {
+                mpTurnLabel.setText("Waiting for " + MultiplayerSession.currentPlayerName() + "...");
+                mpTurnLabel.setForeground(new Color(0xe0685e));
+            }
+            hud.add(mpTurnLabel);
+
+            // P3-41: the relation to every other player, always visible and color
+            // coded (red = enemy, green = ally, gray = neutral) - never a guess
+            String myName = MultiplayerSession.get().getMyName();
+            for (User user : Game.instance.getPlayersInGame()) {
+                if (user.getUsername().equals(myName)) continue;
+                sut.civilization.Model.ModulEnums.Relation relation =
+                        Game.instance.relationBetween(myName, user.getUsername());
+                JLabel chip = hudLabel();
+                chip.setText(user.getUsername() + ": "
+                        + (Game.instance.isEliminated(user.getUsername()) ? "Eliminated" : relation.label));
+                chip.setForeground(relationColor(relation));
+                chip.setToolTipText("Your diplomatic state with " + user.getUsername());
+                hud.add(chip);
+            }
+        }
+
         JButton townHallBtn = hudButton("Town Hall");
         JButton tradeBtn = hudButton("Trade");
         JButton unitsBtn = hudButton("Units");
@@ -202,11 +298,20 @@ public class GamePlayController extends ViewController {
         JButton debugBtn = hudButton("Debug");
         JButton menuBtn = hudButton("Menu");
 
-        townHallBtn.addActionListener(e -> showTownHallPanel());
-        tradeBtn.addActionListener(e -> showTradePanel());
+        // phase 3: in multiplayer the Town Hall button opens the training dialog
+        // (spec flow: armies are trained from resources, requests go to the server)
+        townHallBtn.addActionListener(e -> {
+            if (MultiplayerSession.isActive()) showMultiplayerTownHallDialog();
+            else showTownHallPanel();
+        });
+        // phase 3: in multiplayer the Trade button opens the PLAYER trade dialog
+        tradeBtn.addActionListener(e -> {
+            if (MultiplayerSession.isActive()) showMultiplayerTradeDialog();
+            else showTradePanel();
+        });
         unitsBtn.addActionListener(e -> showUnits());
         statsBtn.addActionListener(e -> showDemographics());
-        debugBtn.addActionListener(e -> showDebugPanel());
+        debugBtn.addActionListener(e -> { if (!blockInMultiplayer()) showDebugPanel(); });
         menuBtn.addActionListener(e -> showMenu());
 
         JPanel hudButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 5));
@@ -215,7 +320,17 @@ public class GamePlayController extends ViewController {
         hudButtons.add(tradeBtn);
         hudButtons.add(unitsBtn);
         hudButtons.add(statsBtn);
-        hudButtons.add(debugBtn);
+        // phase 3: no local debug in a server-authoritative match - the server would
+        // ignore local edits anyway, and cheats belong to the (skipped) bonus row
+        if (!MultiplayerSession.isActive()) hudButtons.add(debugBtn);
+        if (MultiplayerSession.isActive()) {
+            JButton diplomacyBtn = hudButton("Diplomacy");
+            diplomacyBtn.addActionListener(e -> showDiplomacyDialog());
+            hudButtons.add(diplomacyBtn);
+            JButton chatBtn = hudButton("Chat");
+            chatBtn.addActionListener(e -> MultiplayerSession.get().openChat(root));
+            hudButtons.add(chatBtn);
+        }
         hudButtons.add(menuBtn);
 
         hudPanel.add(hud, BorderLayout.CENTER);
@@ -239,6 +354,13 @@ public class GamePlayController extends ViewController {
         p.add(pre);
         p.add(valueLabel);
         return p;
+    }
+
+    /** True (and explains itself) when a single-player-only panel is opened mid-multiplayer. */
+    private boolean blockInMultiplayer() {
+        if (!MultiplayerSession.isActive()) return false;
+        showPopUp(SwingUtilities.getWindowAncestor(root), "Not available in multiplayer yet.");
+        return true;
     }
 
     private JButton hudButton(String text) {
@@ -290,6 +412,12 @@ public class GamePlayController extends ViewController {
         endTurnButton.setForeground(Color.WHITE);
         endTurnButton.setBounds(1200, 700, 150, 45);
         endTurnButton.addActionListener(e -> nextTurn());
+        // phase 3: while an opponent is playing, the button says why it is off
+        // (the screen rebuilds on every snapshot, so it comes back on by itself)
+        if (MultiplayerSession.isActive() && !MultiplayerSession.isMyTurn()) {
+            endTurnButton.setEnabled(false);
+            endTurnButton.setToolTipText("It is " + MultiplayerSession.currentPlayerName() + "'s turn.");
+        }
         overlayLayer.add(endTurnButton);
     }
 
@@ -651,12 +779,21 @@ public class GamePlayController extends ViewController {
             JLabel nationName = new JLabel("Player: " + user.getUsername());
             nationName.setForeground(Color.WHITE);
             nationName.setFont(new Font("SansSerif", Font.BOLD, 13));
-            JLabel units = new JLabel("Units: " + nation.getUnits().size() + "/" + nation.getUnitCap());
-            JLabel territory = new JLabel("Territory: " + nation.getTerritory().size() + " hexes");
-            JLabel food = new JLabel("Food: " + nation.getFood().getBalance());
-            JLabel wood = new JLabel("Wood: " + nation.getWood().getBalance());
-            JLabel stone = new JLabel("Stone: " + nation.getStone().getBalance());
-            JLabel iron = new JLabel("Iron: " + nation.getIron().getBalance());
+            // phase 3: an opponent's economy is secret - the server does not even
+            // send their balances (they arrive zeroed), so show "?" instead of
+            // pretending we know. Unit/territory counts reflect only what our fog
+            // reveals, which is exactly what the spec allows us to know
+            boolean economyHidden = MultiplayerSession.isActive()
+                    && nation != Game.instance.getLoggedInUser().getNation();
+            JLabel units = new JLabel("Units: " + (economyHidden
+                    ? nation.getUnits().size() + " visible"
+                    : nation.getUnits().size() + "/" + nation.getUnitCap()));
+            JLabel territory = new JLabel("Territory: "
+                    + (economyHidden ? nation.getTerritory().size() + " seen" : nation.getTerritory().size() + " hexes"));
+            JLabel food = new JLabel("Food: " + (economyHidden ? "?" : nation.getFood().getBalance()));
+            JLabel wood = new JLabel("Wood: " + (economyHidden ? "?" : nation.getWood().getBalance()));
+            JLabel stone = new JLabel("Stone: " + (economyHidden ? "?" : nation.getStone().getBalance()));
+            JLabel iron = new JLabel("Iron: " + (economyHidden ? "?" : nation.getIron().getBalance()));
             for (JLabel l : new JLabel[]{units, territory, food, wood, stone, iron}) l.setForeground(new Color(0xaaaaaa));
 
             row.add(nationName);
@@ -898,6 +1035,13 @@ public class GamePlayController extends ViewController {
     }
 
     private void handleCommonActions(UnitActions action, Unit unit, JLabel unitMovement, int selection, JButton actionButton) {
+        // phase 3: MOVE and ATTACK go through the server; the rest is disabled
+        // with the reason on the tooltip (never a dead mystery button)
+        if (MultiplayerSession.isActive() && action != UnitActions.MOVE && action != UnitActions.ATTACK) {
+            actionButton.setEnabled(false);
+            actionButton.setToolTipText("Not available in multiplayer yet.");
+            return;
+        }
         switch (action) {
             case SLEEP:
                 actionButton.addActionListener(e -> {
@@ -925,6 +1069,15 @@ public class GamePlayController extends ViewController {
     private JScrollPane openImprovementsScrollPane;
 
     private void handleCivilizedUnitActions(UnitActions action, CivilizedUnit unit, JButton actionButton, JPanel actionsAndImprovementsHBox) {
+        // phase 3: most of these don't run locally in multiplayer yet. MOVE must be
+        // left alone here - every button passes through BOTH handlers, and MOVE
+        // belongs to handleCommonActions (which already enabled it for multiplayer).
+        // ATTACK falls through to its case below, which has its own MP branch
+        if (MultiplayerSession.isActive() && action != UnitActions.MOVE && action != UnitActions.ATTACK) {
+            actionButton.setEnabled(false);
+            actionButton.setToolTipText("Not available in multiplayer yet.");
+            return;
+        }
         switch (action) {
             case FOUND_CITY:
                 boolean canExpand = TownHallController.canExpandBorder(unit);
@@ -996,6 +1149,12 @@ public class GamePlayController extends ViewController {
                 break;
             }
             case ATTACK: {
+                // phase 3: in multiplayer the attack is a REQUEST - the server rolls
+                // the dice and everyone gets fresh snapshots plus a war report
+                if (MultiplayerSession.isActive()) {
+                    wireMultiplayerAttack(actionButton, unit);
+                    break;
+                }
                 // phase 2 dice combat (P2-14/15): pick a target in range, fight, and
                 // show the dice - the battle must never resolve silently
                 String blocked = CombatController.checkCanAttack(unit);
@@ -1329,17 +1488,23 @@ public class GamePlayController extends ViewController {
         continueButton.addActionListener(e -> closeActivePopup());
 
         // phase 2 save/load: both live in the pause menu too (spec wants load
-        // reachable from the main menu AND from inside the game)
+        // reachable from the main menu AND from inside the game).
+        // phase 3: in multiplayer only the SERVER saves (it autosaves each round),
+        // and loading a local file mid-match makes no sense at all
         JButton saveButton = new JButton("Save Game");
-        saveButton.addActionListener(e -> saveGameDialog());
+        saveButton.addActionListener(e -> { if (!blockInMultiplayer()) saveGameDialog(); });
 
         JButton loadButton = new JButton("Load Game");
-        loadButton.addActionListener(e -> loadGameDialog());
+        loadButton.addActionListener(e -> { if (!blockInMultiplayer()) loadGameDialog(); });
 
         JButton returnToMainMenu = new JButton("Return To Main Menu");
         returnToMainMenu.addActionListener(e -> {
             closeActivePopup();
-            Game.instance.changeScene(Menus.MAIN_MENU);
+            if (MultiplayerSession.isActive()) {
+                MultiplayerSession.get().end("You left the game.");
+            } else {
+                Game.instance.changeScene(Menus.MAIN_MENU);
+            }
         });
 
         JButton exit = new JButton("Exit");
@@ -1574,6 +1739,14 @@ public class GamePlayController extends ViewController {
     }
 
     private void handleMoveClick(int x, int y, int selection, JLabel unitMovement, Unit unit) {
+        // phase 3: in multiplayer the move is a REQUEST - the server walks the unit
+        // on the real map and answers with fresh snapshots for everyone
+        if (MultiplayerSession.isActive()) {
+            clearMoveHandlers();
+            MultiplayerSession.get().sendMove(unit.getLocation(), x, y);
+            return;
+        }
+
         String message = UnitController.unitSetPath(x, y, selection);
         boolean accepted = UnitController.hasMoreSteps(unit);
         showPopUp(SwingUtilities.getWindowAncestor(root), message);
@@ -1765,6 +1938,17 @@ public class GamePlayController extends ViewController {
             if (result != JOptionPane.YES_OPTION) return;
         }
 
+        // phase 3: in multiplayer the SERVER ends the turn, never this client
+        if (MultiplayerSession.isActive()) {
+            if (!MultiplayerSession.isMyTurn()) {
+                showPopUp(SwingUtilities.getWindowAncestor(root),
+                        "It is " + MultiplayerSession.currentPlayerName() + "'s turn, not yours.");
+                return;
+            }
+            MultiplayerSession.get().sendEndTurn();
+            return;
+        }
+
         String message = GameController.endTurn();
 
         // phase 2: show everything that happened during turn processing as one report
@@ -1859,6 +2043,280 @@ public class GamePlayController extends ViewController {
         }
         row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 50));
         return row;
+    }
+
+    // ── Phase 3 multiplayer: attack / diplomacy / trade UI ────────────────────
+
+    /** A war/battle report pushed by the server - shown with the same dice dialog. */
+    public void showNetworkBattle(sut.civilization.Network.Messages.BattleReportMessage message) {
+        CombatController.BattleReport report = new CombatController.BattleReport();
+        report.title = message.getTitle();
+        report.attackerDice = message.getAttackerDice() == null ? new int[0] : message.getAttackerDice();
+        report.defenderDice = message.getDefenderDice() == null ? new int[0] : message.getDefenderDice();
+        if (message.getLines() != null) report.lines.addAll(message.getLines());
+        report.summary = message.getSummary() == null ? "" : message.getSummary();
+        showBattleDialog(report);
+    }
+
+    /** Everything this unit could attack right now, judged on the render copy (server re-checks anyway). */
+    private java.util.ArrayList<Pair<Integer, Integer>> multiplayerTargetsInRange(CivilizedUnit unit) {
+        java.util.ArrayList<Pair<Integer, Integer>> targets = new java.util.ArrayList<>();
+        Nation mine = Game.instance.getLoggedInUser().getNation();
+        for (Pair<Integer, Integer> hex : DisasterController.hexesInRadius(unit.getLocation(), unit.getCivilizedUnitType().attackRange)) {
+            if (hex.equals(unit.getLocation())) continue;
+            Land tile = Game.instance.map[hex.x][hex.y];
+            if (tile.getVisibility() != 2) continue; // can't attack into fog
+            if (tile.getEnemy() != null) { targets.add(hex); continue; }
+            CivilizedUnit other = tile.getCivilizedUnit();
+            if (other != null && other.getOwnerNation() != mine) { targets.add(hex); continue; }
+            for (User u : Game.instance.getPlayersInGame()) {
+                if (u.getNation() == mine) continue;
+                TownHall th = u.getNation().getTownHall();
+                if (th != null && th.getMainLand() == tile) { targets.add(hex); break; }
+            }
+        }
+        return targets;
+    }
+
+    private String describeMultiplayerTarget(Pair<Integer, Integer> hex) {
+        Land tile = Game.instance.map[hex.x][hex.y];
+        if (tile.getEnemy() != null)
+            return tile.getEnemy().getType().name + " at (" + hex.x + "," + hex.y + ")";
+        if (tile.getCivilizedUnit() != null)
+            return tile.getCivilizedUnit().getCivilizedUnitType().name + " at (" + hex.x + "," + hex.y + ")";
+        return "Town Hall at (" + hex.x + "," + hex.y + ")";
+    }
+
+    /** MP version of the Attack button: pick a target, send an AttackRequest, let the server roll. */
+    private void wireMultiplayerAttack(JButton actionButton, CivilizedUnit unit) {
+        String blocked = null;
+        if (!unit.getCivilizedUnitType().isMilitary) blocked = "Only military units can attack!";
+        else if (!unit.hasAp()) blocked = "No AP left!";
+        else if (multiplayerTargetsInRange(unit).isEmpty()) blocked = "No target in range!";
+        actionButton.setEnabled(blocked == null);
+        if (blocked != null) {
+            actionButton.setToolTipText(blocked);
+            return;
+        }
+        actionButton.addActionListener(e -> {
+            java.util.ArrayList<Pair<Integer, Integer>> targets = multiplayerTargetsInRange(unit);
+            if (targets.isEmpty()) return;
+            Pair<Integer, Integer> picked = targets.get(0);
+            if (targets.size() > 1) {
+                String[] options = new String[targets.size()];
+                for (int i = 0; i < targets.size(); i++) options[i] = describeMultiplayerTarget(targets.get(i));
+                int pick = JOptionPane.showOptionDialog(root, "Attack which target?", "Attack",
+                        JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[0]);
+                if (pick < 0) return;
+                picked = targets.get(pick);
+            }
+            MultiplayerSession.get().sendAttack(unit.getLocation(), picked.x, picked.y);
+        });
+    }
+
+    private Color relationColor(sut.civilization.Model.ModulEnums.Relation relation) {
+        switch (relation) {
+            case ENEMY: return new Color(0xe0685e);
+            case ALLY: return new Color(0x9acd68);
+            default: return new Color(0xbbbbbb);
+        }
+    }
+
+    /** Diplomacy panel (P3-38..41): current relation per player, color-coded, with the possible actions. */
+    private void showDiplomacyDialog() {
+        String myName = MultiplayerSession.get().getMyName();
+        JPanel panel = new JPanel();
+        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+
+        JDialog dialog = new JDialog(SwingUtilities.getWindowAncestor(root), "Diplomacy");
+        for (User user : Game.instance.getPlayersInGame()) {
+            if (user.getUsername().equals(myName)) continue;
+            String them = user.getUsername();
+            sut.civilization.Model.ModulEnums.Relation relation = Game.instance.relationBetween(myName, them);
+
+            JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
+            JLabel name = new JLabel(them + " - " + relation.label
+                    + (Game.instance.isEliminated(them) ? " (eliminated)" : ""));
+            name.setForeground(relationColor(relation));
+            name.setFont(new Font("SansSerif", Font.BOLD, 13));
+            row.add(name);
+
+            if (!Game.instance.isEliminated(them)) {
+                if (relation == sut.civilization.Model.ModulEnums.Relation.NEUTRAL) {
+                    JButton war = new JButton("Declare War");
+                    war.addActionListener(e -> { MultiplayerSession.get().sendDeclareWar(them); dialog.dispose(); });
+                    row.add(war);
+                    JButton ally = new JButton("Offer Alliance");
+                    ally.addActionListener(e -> { MultiplayerSession.get().sendOfferAlliance(them); dialog.dispose(); });
+                    row.add(ally);
+                } else if (relation == sut.civilization.Model.ModulEnums.Relation.ALLY) {
+                    JButton breakIt = new JButton("Break Alliance");
+                    breakIt.addActionListener(e -> { MultiplayerSession.get().sendBreakAlliance(them); dialog.dispose(); });
+                    row.add(breakIt);
+                }
+                // an offer FROM them waiting for MY answer
+                if (myName.equals(Game.instance.getAllianceOffers().get(them))) {
+                    JButton accept = new JButton("Accept Alliance");
+                    accept.addActionListener(e -> { MultiplayerSession.get().sendAllianceReply(them, true); dialog.dispose(); });
+                    row.add(accept);
+                    JButton decline = new JButton("Decline");
+                    decline.addActionListener(e -> { MultiplayerSession.get().sendAllianceReply(them, false); dialog.dispose(); });
+                    row.add(decline);
+                }
+                // my own offer still waiting on them
+                if (them.equals(Game.instance.getAllianceOffers().get(myName))) {
+                    JLabel waiting = new JLabel("(alliance offer sent - waiting)");
+                    waiting.setForeground(new Color(0x888888));
+                    row.add(waiting);
+                }
+            }
+            panel.add(row);
+        }
+
+        dialog.setModalityType(Dialog.ModalityType.APPLICATION_MODAL);
+        dialog.add(new JScrollPane(panel));
+        dialog.setSize(430, 220);
+        dialog.setLocationRelativeTo(root);
+        dialog.setVisible(true);
+    }
+
+    /** MP Town Hall: train units through the server (the spec's build-then-fight flow). */
+    private void showMultiplayerTownHallDialog() {
+        Nation mine = Game.instance.getLoggedInUser().getNation();
+        TownHall th = mine.getTownHall();
+        if (th == null) {
+            showPopUp(SwingUtilities.getWindowAncestor(root), "You have no Town Hall anymore.");
+            return;
+        }
+
+        JDialog dialog = new JDialog(SwingUtilities.getWindowAncestor(root), "Town Hall - Train Units");
+        JPanel panel = new JPanel();
+        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+        panel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+
+        JLabel status = new JLabel(th.getLevelName() + " (level " + th.getLevel() + ")  HP " + th.getHp() + "/" + th.getMaxHp());
+        status.setFont(new Font("SansSerif", Font.BOLD, 13));
+        panel.add(status);
+        JLabel queue = new JLabel(th.hasQueuedProduction()
+                ? "In production: " + th.getCurrentProduction().getDisplayName()
+                + " (" + th.getCurrentProduction().getTurnsLeft() + " turns left)"
+                : "Production queue is empty.");
+        queue.setForeground(new Color(0x666666));
+        panel.add(queue);
+        panel.add(Box.createVerticalStrut(8));
+        panel.add(new JSeparator());
+
+        for (CivilizedUnitType type : CivilizedUnitType.values()) {
+            JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
+            StringBuilder info = new StringBuilder(type.name + "  -  " + type.productionCostFood + " food");
+            if (type.productionCostWood > 0) info.append(" + ").append(type.productionCostWood).append(" wood");
+            info.append(", ").append(type.turnsToTrain).append(" turn").append(type.turnsToTrain == 1 ? "" : "s");
+            if (type.requiredTownHallLevel > 1) info.append(", needs TH level ").append(type.requiredTownHallLevel);
+            if (type.requiresMilitaryStable) info.append(" + Military Stable");
+            row.add(new JLabel(info.toString()));
+            JButton train = new JButton("Train");
+            // the server re-checks everything and answers with the exact reason if not
+            train.addActionListener(e -> { MultiplayerSession.get().sendTrainUnit(type.name); dialog.dispose(); });
+            row.add(train);
+            panel.add(row);
+        }
+        JLabel hint = new JLabel("Upgrades and research are not networked yet.");
+        hint.setForeground(new Color(0x888888));
+        panel.add(hint);
+
+        dialog.setModalityType(Dialog.ModalityType.APPLICATION_MODAL);
+        dialog.add(new JScrollPane(panel));
+        dialog.setSize(470, 380);
+        dialog.setLocationRelativeTo(root);
+        dialog.setVisible(true);
+    }
+
+    /** Player-to-player trade (P3-35..37): compose an offer + answer the inbox. */
+    private void showMultiplayerTradeDialog() {
+        String myName = MultiplayerSession.get().getMyName();
+        JDialog dialog = new JDialog(SwingUtilities.getWindowAncestor(root), "Player Trade");
+
+        JPanel panel = new JPanel();
+        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+        panel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+
+        // ── new offer form ──
+        java.util.ArrayList<String> others = new java.util.ArrayList<>();
+        for (User user : Game.instance.getPlayersInGame())
+            if (!user.getUsername().equals(myName) && !Game.instance.isEliminated(user.getUsername()))
+                others.add(user.getUsername());
+        JComboBox<String> targetCombo = new JComboBox<>(others.toArray(new String[0]));
+
+        String[] resources = {"Food", "Wood", "Stone", "Iron"};
+        JSpinner[] give = new JSpinner[4];
+        JSpinner[] want = new JSpinner[4];
+        JPanel form = new JPanel(new GridLayout(3, 5, 6, 2));
+        form.add(new JLabel(""));
+        for (String r : resources) form.add(new JLabel(r));
+        form.add(new JLabel("You give:"));
+        for (int i = 0; i < 4; i++) { give[i] = new JSpinner(new SpinnerNumberModel(0, 0, 999, 1)); form.add(give[i]); }
+        form.add(new JLabel("You want:"));
+        for (int i = 0; i < 4; i++) { want[i] = new JSpinner(new SpinnerNumberModel(0, 0, 999, 1)); form.add(want[i]); }
+        form.setMaximumSize(new Dimension(Integer.MAX_VALUE, 90));
+
+        JButton send = new JButton("Send Offer");
+        send.addActionListener(e -> {
+            if (targetCombo.getSelectedItem() == null) return;
+            int[] g = new int[4], w = new int[4];
+            for (int i = 0; i < 4; i++) { g[i] = (int) give[i].getValue(); w[i] = (int) want[i].getValue(); }
+            MultiplayerSession.get().sendTradeOffer((String) targetCombo.getSelectedItem(), g, w);
+            dialog.dispose();
+        });
+
+        JPanel sendRow = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        sendRow.add(new JLabel("To:"));
+        sendRow.add(targetCombo);
+        sendRow.add(send);
+
+        JLabel formHeader = new JLabel("New offer (the server locks what you give until it is answered):");
+        formHeader.setFont(new Font("SansSerif", Font.BOLD, 12));
+        panel.add(formHeader);
+        panel.add(form);
+        panel.add(sendRow);
+        panel.add(new JSeparator());
+
+        // ── inbox / outbox ──
+        JLabel inboxHeader = new JLabel("Trade inbox:");
+        inboxHeader.setFont(new Font("SansSerif", Font.BOLD, 12));
+        panel.add(inboxHeader);
+        boolean any = false;
+        for (sut.civilization.Model.Classes.TradeOffer offer : Game.instance.getTradeOffers()) {
+            if (!offer.isPending()) continue;
+            if (!offer.to.equals(myName) && !offer.from.equals(myName)) continue;
+            any = true;
+            JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
+            if (offer.to.equals(myName)) {
+                row.add(new JLabel(offer.from + " gives " + offer.describeGive() + " for your " + offer.describeWant()));
+                JButton accept = new JButton("Accept");
+                accept.addActionListener(e -> { MultiplayerSession.get().sendTradeReply(offer.id, true); dialog.dispose(); });
+                JButton reject = new JButton("Reject");
+                reject.addActionListener(e -> { MultiplayerSession.get().sendTradeReply(offer.id, false); dialog.dispose(); });
+                row.add(accept);
+                row.add(reject);
+            } else {
+                row.add(new JLabel("To " + offer.to + ": your " + offer.describeGive() + " for " + offer.describeWant() + " (waiting)"));
+                JButton cancel = new JButton("Cancel");
+                cancel.addActionListener(e -> { MultiplayerSession.get().sendTradeReply(offer.id, false); dialog.dispose(); });
+                row.add(cancel);
+            }
+            panel.add(row);
+        }
+        if (!any) {
+            JLabel none = new JLabel("No waiting offers.");
+            none.setForeground(new Color(0x888888));
+            panel.add(none);
+        }
+
+        dialog.setModalityType(Dialog.ModalityType.APPLICATION_MODAL);
+        dialog.add(new JScrollPane(panel));
+        dialog.setSize(520, 360);
+        dialog.setLocationRelativeTo(root);
+        dialog.setVisible(true);
     }
 
     /** Shows the dice of every enemy attack that happened during turn processing. */

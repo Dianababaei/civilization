@@ -649,9 +649,14 @@ public class Phase3Driver {
             denied = (ActionResultResponse) alice.expect(ActionResultResponse.TYPE);
             check("trade: offering resources you lack is rejected", !denied.isOk());
 
+            // regression: a NEGATIVE food balance (starvation debt) must not block an
+            // offer that gives no food at all - only offered resources are checked
+            aliceUser.getNation().getFood().add(-30); // 25 -> -5, starving
+
             alice.send(new TradeOfferRequest("bob", 0, 5, 0, 0, 0, 0, 3, 0)); // 5 wood for 3 stone
             ActionResultResponse ok = (ActionResultResponse) alice.expect(ActionResultResponse.TYPE);
-            check("trade: a valid offer is accepted and locked", ok.isOk() && ok.getText().contains("locked"));
+            check("trade: a wood offer works even while food balance is negative",
+                    ok.isOk() && ok.getText().contains("locked"));
             GameStateBroadcast afterOffer = (GameStateBroadcast) alice.expect(GameStateBroadcast.TYPE);
             sut.civilization.Model.Classes.Game gameAfterOffer = decodeState(afterOffer);
             check("trade: the offered wood is locked out of alice's balance (20 -> 15)",
