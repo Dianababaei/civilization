@@ -37,6 +37,8 @@ public class Phase3Driver {
         final Socket socket;
         final BufferedReader in;
         final PrintWriter out;
+        /** JWT captured from the join answer, attached to every later message (P3-51). */
+        String token;
 
         TestClient() throws IOException {
             this(PORT);
@@ -52,6 +54,7 @@ public class Phase3Driver {
         }
 
         void send(Message m) {
+            if (token != null) m.setToken(token);
             out.println(MessageCodec.encode(m));
         }
 
@@ -61,6 +64,8 @@ public class Phase3Driver {
                 String line = in.readLine();
                 if (line == null) throw new IOException("connection closed while waiting for " + type);
                 Message m = MessageCodec.decode(line);
+                if (m instanceof JoinResultResponse && ((JoinResultResponse) m).isOk())
+                    token = ((JoinResultResponse) m).getAuthToken();
                 if (m.getType().equals(type)) return m;
             }
             throw new IOException("never received " + type);
@@ -167,6 +172,21 @@ public class Phase3Driver {
         check("lobby: second player is not host", bobJoin.isOk() && !bobJoin.isHost());
         state = (LobbyStateBroadcast) alice.expect(LobbyStateBroadcast.TYPE);
         check("lobby: join is pushed to everyone", state.getPlayers().size() == 2);
+
+        // ── JWT auth (bonus P3-51) ──
+        check("jwt: login issues a signed header.payload.signature token",
+                bobJoin.getAuthToken() != null && bobJoin.getAuthToken().split("\\.").length == 3);
+        String realToken = bob.token;
+        bob.token = realToken.substring(0, realToken.length() - 2) + "xx"; // forge the signature
+        bob.send(new SetReadyRequest(true));
+        ErrorResponse forged = (ErrorResponse) bob.expect(ErrorResponse.TYPE);
+        check("jwt: a tampered token is rejected by the server",
+                forged.getReason().toLowerCase().contains("token"));
+        bob.token = null; // no token at all
+        bob.send(new SetReadyRequest(true));
+        forged = (ErrorResponse) bob.expect(ErrorResponse.TYPE);
+        check("jwt: a missing token is rejected too", forged.getReason().contains("Missing"));
+        bob.token = realToken;
 
         // ready state propagates
         bob.send(new SetReadyRequest(true));
@@ -399,6 +419,15 @@ public class Phase3Driver {
             // spec flow: only civil units at spawn - armies must be TRAINED
             check("game: alice starts with 5 civil units, no military",
                     meA.getNation().getUnits().size() == 5 && meA.getNation().getMilitaryUnitCount() == 0);
+            java.util.HashSet<String> unitIds = new java.util.HashSet<>();
+            boolean idsOk = true;
+            for (sut.civilization.Model.Classes.Unit u : meA.getNation().getUnits()) {
+                if (u.getId() == null || u.getCreatedAt() <= 0 || !unitIds.add(u.getId())) idsOk = false;
+            }
+            check("entities: every unit carries a unique id + createdAt (P3-53)", idsOk);
+            check("entities: the town hall does too",
+                    meA.getNation().getTownHall().getId() != null
+                            && meA.getNation().getTownHall().getCreatedAt() > 0);
 
             // fog of war: bob's corner must be a black hole in alice's packet
             check("fog: bob's spawn tile is fogged for alice", gameA.map[11][11].getVisibility() == 0);
@@ -473,6 +502,28 @@ public class Phase3Driver {
             check("train: a busy Town Hall refuses a second order",
                     !denied.isOk() && denied.getText().contains("busy"));
 
+            // ── demo/cheat shortcuts (P3-58, P3-48 rules): host-only + announced ──
+            bob.send(new DebugActionRequest(DebugActionRequest.RESOURCES));
+            denied = (ActionResultResponse) bob.expect(ActionResultResponse.TYPE);
+            check("demo: non-host cheats are rejected", !denied.isOk() && denied.getText().contains("host"));
+
+            alice.send(new DebugActionRequest(DebugActionRequest.RESOURCES));
+            ActionResultResponse cheatOk = (ActionResultResponse) alice.expect(ActionResultResponse.TYPE);
+            check("demo: host cheat is accepted", cheatOk.isOk());
+            GameStateBroadcast afterCheat = (GameStateBroadcast) alice.expect(GameStateBroadcast.TYPE);
+            // storage capacity clamps the grant (start cap is 200) - assert "filled up"
+            check("demo: the server actually granted the resources (up to the storage cap)",
+                    findUser(decodeState(afterCheat), "alice").getNation().getFood().getBalance() >= 150);
+            boolean announced = false;
+            for (String n : afterCheat.getNotifications()) if (n.contains("DEMO CHEAT")) announced = true;
+            check("demo: the cheat is announced to everyone - never a secret", announced);
+            bob.expect(GameStateBroadcast.TYPE);
+
+            // resources are full now, but the Town Hall is busy training - upgrade must wait
+            alice.send(new UpgradeTownHallRequest());
+            denied = (ActionResultResponse) alice.expect(ActionResultResponse.TYPE);
+            check("townhall: upgrade refused while production is busy", !denied.isOk());
+
             // moving someone else's (or a missing) unit is rejected
             alice.send(new MoveUnitRequest(11, 11, 11, 10));
             denied = (ActionResultResponse) alice.expect(ActionResultResponse.TYPE);
@@ -514,11 +565,25 @@ public class Phase3Driver {
             check("turns: back to alice", round2.getCurrentPlayer().equals("alice"));
             bob.expect(GameStateBroadcast.TYPE);
 
-            // mid-game disconnect: bob drops, the match must carry on for alice
+            // mid-game disconnect: bob drops, the match must carry on for alice -
+            // and a trade still waiting on him must unlock and refund her
+            alice.send(new TradeOfferRequest("bob", 0, 5, 0, 0, 0, 0, 1, 0));
+            alice.expect(ActionResultResponse.TYPE);
+            GameStateBroadcast offered = (GameStateBroadcast) alice.expect(GameStateBroadcast.TYPE);
+            int woodWhileLocked = findUser(decodeState(offered), "alice").getNation().getWood().getBalance();
+            bob.expect(GameStateBroadcast.TYPE);
+
             bob.close();
             ChatBroadcast note = (ChatBroadcast) alice.expect(ChatBroadcast.TYPE);
             check("drop: bob's exit is announced", note.getText().contains("bob") && note.getText().contains("disconnected"));
-            alice.expect(GameStateBroadcast.TYPE);
+            GameStateBroadcast dropState = (GameStateBroadcast) alice.expect(GameStateBroadcast.TYPE);
+            sut.civilization.Model.Classes.Game dropGame = decodeState(dropState);
+            boolean anyPending = false;
+            for (sut.civilization.Model.Classes.TradeOffer offer : dropGame.getTradeOffers())
+                if (offer.isPending()) anyPending = true;
+            check("drop: the dropped player's pending trade is cancelled", !anyPending);
+            check("drop: the locked wood is refunded to the sender",
+                    findUser(dropGame, "alice").getNation().getWood().getBalance() == woodWhileLocked + 5);
             alice.send(new EndTurnRequest());
             alice.expect(ActionResultResponse.TYPE);
             GameStateBroadcast alone = (GameStateBroadcast) alice.expect(GameStateBroadcast.TYPE);
@@ -644,6 +709,12 @@ public class Phase3Driver {
             check("diplomacy: attacking while Neutral is rejected with a clear reason",
                     !denied.isOk() && denied.getText().contains("not at war"));
 
+            // ── town hall upgrade is a server request too ──
+            alice.send(new UpgradeTownHallRequest());
+            denied = (ActionResultResponse) alice.expect(ActionResultResponse.TYPE);
+            check("townhall: upgrade without the resources is rejected with the reason",
+                    !denied.isOk() && !denied.getText().isEmpty());
+
             // ── trade: validation + lock (P3-35/36) ──
             alice.send(new TradeOfferRequest("bob", 0, 0, 0, 5, 1, 0, 0, 0)); // 5 iron - alice has 0
             denied = (ActionResultResponse) alice.expect(ActionResultResponse.TYPE);
@@ -752,11 +823,17 @@ public class Phase3Driver {
             ok = (ActionResultResponse) bob.expect(ActionResultResponse.TYPE);
             check("trade: accept goes through in bob's own turn", ok.isOk());
             bob.expect(GameStateBroadcast.TYPE);
+            ErrorResponse verdict = (ErrorResponse) alice.expect(ErrorResponse.TYPE);
+            check("trade: the SENDER is told their offer was accepted",
+                    verdict.getReason().contains("ACCEPTED"));
             alice.expect(GameStateBroadcast.TYPE);
             bob.send(new TradeReplyRequest(offer2Id, false));
             ok = (ActionResultResponse) bob.expect(ActionResultResponse.TYPE);
             check("trade: reject goes through too", ok.isOk());
             GameStateBroadcast bobAfterTrades = (GameStateBroadcast) bob.expect(GameStateBroadcast.TYPE);
+            verdict = (ErrorResponse) alice.expect(ErrorResponse.TYPE);
+            check("trade: the SENDER is told their offer was rejected + refunded",
+                    verdict.getReason().contains("REJECTED"));
             GameStateBroadcast afterTrades = (GameStateBroadcast) alice.expect(GameStateBroadcast.TYPE);
             sut.civilization.Model.Classes.Game gameAfterTrades = decodeState(afterTrades);
             sut.civilization.Model.Classes.Game bobsView = decodeState(bobAfterTrades);
@@ -778,6 +855,21 @@ public class Phase3Driver {
             alice.expect(GameStateBroadcast.TYPE); // world stepped to turn 2, alice again
             bob.expect(GameStateBroadcast.TYPE);
 
+            // ── with full storage the upgrade enqueues; research then waits its turn ──
+            alice.send(new DebugActionRequest(DebugActionRequest.RESOURCES));
+            alice.expect(ActionResultResponse.TYPE);
+            alice.expect(GameStateBroadcast.TYPE);
+            bob.expect(GameStateBroadcast.TYPE);
+            alice.send(new UpgradeTownHallRequest());
+            ok = (ActionResultResponse) alice.expect(ActionResultResponse.TYPE);
+            check("townhall: upgrade enqueues once the resources are there",
+                    ok.isOk() && ok.getText().contains("queue"));
+            alice.expect(GameStateBroadcast.TYPE);
+            bob.expect(GameStateBroadcast.TYPE);
+            alice.send(new ResearchRequest("Stone Mine Technology"));
+            denied = (ActionResultResponse) alice.expect(ActionResultResponse.TYPE);
+            check("research: routed to the server and refused while the queue is busy", !denied.isOk());
+
             // ── flat structure damage over the wire (P3-33) ──
             int thMax = bobUser.getNation().getTownHall().getMaxHp();
             alice.send(new AttackRequest(sword2Hex.x, sword2Hex.y, 11, 11));
@@ -790,8 +882,17 @@ public class Phase3Driver {
                     bobUser.getNation().getTownHall().getHp() == thMax - 10);
             bob.expect(GameStateBroadcast.TYPE);
 
+            // ── demo weaken over the wire, then the elimination rig ──
+            alice.send(new DebugActionRequest(DebugActionRequest.WEAKEN_ENEMY_TH));
+            ok = (ActionResultResponse) alice.expect(ActionResultResponse.TYPE);
+            check("demo: weaken-enemy-town-hall accepted", ok.isOk());
+            alice.expect(GameStateBroadcast.TYPE);
+            bob.expect(GameStateBroadcast.TYPE);
+            check("demo: the enemy town hall really sits at 15 HP on the server",
+                    bobUser.getNation().getTownHall().getHp() == 15);
+
             // ── the kill: last town hall falls -> elimination + win (P3-01) ──
-            bobUser.getNation().getTownHall().setHp(5); // rig: skip 20 more turns of chipping
+            bobUser.getNation().getTownHall().setHp(5); // rig: one hit finishes it
             alice.send(new AttackRequest(sword2Hex.x, sword2Hex.y, 11, 11));
             ok = (ActionResultResponse) alice.expect(ActionResultResponse.TYPE);
             check("win: the killing blow goes through", ok.isOk());

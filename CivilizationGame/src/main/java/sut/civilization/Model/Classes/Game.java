@@ -34,6 +34,69 @@ public class Game implements java.io.Serializable {
     private int subTurn = 0;
     private ArrayList<User> playersInGame = new ArrayList<>();
 
+    // ── phase 3 PvP state (P3-01, P3-35..41) ─────────────────────────────────
+    // kept on Game (not on the server session) so every snapshot carries it and
+    // the clients can render diplomacy colors and the trade inbox from their copy.
+    // All of these use lazy getters because phase-2 save files deserialize the
+    // fields as null (same trick as getRng above)
+
+    /** "alice|bob" (names sorted) -> Relation name. Missing pair = NEUTRAL. */
+    private java.util.HashMap<String, sut.civilization.Model.ModulEnums.Relation> relations;
+    /** Alliance offers waiting for an answer: proposer username -> target username. */
+    private java.util.HashMap<String, String> allianceOffers;
+    private ArrayList<TradeOffer> tradeOffers;
+    /** Usernames whose last Town Hall was destroyed (P3-01). They stay in playersInGame so old snapshots resolve, but own nothing. */
+    private ArrayList<String> eliminatedPlayers;
+    /** Set once only one player is left standing - the game is over. */
+    private String winner = null;
+
+    private static String pairKey(String a, String b) {
+        return a.compareTo(b) <= 0 ? a + "|" + b : b + "|" + a;
+    }
+
+    public sut.civilization.Model.ModulEnums.Relation relationBetween(String a, String b) {
+        if (relations == null) relations = new java.util.HashMap<>();
+        return relations.getOrDefault(pairKey(a, b), sut.civilization.Model.ModulEnums.Relation.NEUTRAL);
+    }
+
+    public void setRelation(String a, String b, sut.civilization.Model.ModulEnums.Relation relation) {
+        if (relations == null) relations = new java.util.HashMap<>();
+        relations.put(pairKey(a, b), relation);
+    }
+
+    public java.util.HashMap<String, String> getAllianceOffers() {
+        if (allianceOffers == null) allianceOffers = new java.util.HashMap<>();
+        return allianceOffers;
+    }
+
+    public ArrayList<TradeOffer> getTradeOffers() {
+        if (tradeOffers == null) tradeOffers = new ArrayList<>();
+        return tradeOffers;
+    }
+
+    public TradeOffer findTradeOffer(String id) {
+        for (TradeOffer offer : getTradeOffers())
+            if (offer.id.equals(id)) return offer;
+        return null;
+    }
+
+    public ArrayList<String> getEliminatedPlayers() {
+        if (eliminatedPlayers == null) eliminatedPlayers = new ArrayList<>();
+        return eliminatedPlayers;
+    }
+
+    public boolean isEliminated(String username) {
+        return getEliminatedPlayers().contains(username);
+    }
+
+    public String getWinner() {
+        return winner;
+    }
+
+    public void setWinner(String winner) {
+        this.winner = winner;
+    }
+
     // gives back the JPanel for a screen, set up once by the app entry point
     public interface SceneFactory {
         JPanel createScreen(Menus menu);
@@ -64,6 +127,12 @@ public class Game implements java.io.Serializable {
         // saves from before this field existed deserialize it as null
         if (rng == null) rng = new java.util.Random();
         return rng;
+    }
+
+    /** Phase 3: called on snapshot COPIES only - the server's RNG state must never
+     *  reach a client, or a smart client could predict every future die roll. */
+    public void scrubRng() {
+        rng = new java.util.Random();
     }
 
     public int getSubTurn() {

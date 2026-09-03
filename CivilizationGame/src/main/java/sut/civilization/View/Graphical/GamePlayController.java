@@ -330,6 +330,11 @@ public class GamePlayController extends ViewController {
             JButton chatBtn = hudButton("Chat");
             chatBtn.addActionListener(e -> MultiplayerSession.get().openChat(root));
             hudButtons.add(chatBtn);
+            // demo/cheat shortcuts for evaluation (P3-58): host-only, run by the
+            // SERVER and announced to everyone - unlike the local phase-2 debug
+            JButton demoBtn = hudButton("Demo");
+            demoBtn.addActionListener(e -> showMultiplayerDemoDialog());
+            hudButtons.add(demoBtn);
         }
         hudButtons.add(menuBtn);
 
@@ -1582,6 +1587,71 @@ public class GamePlayController extends ViewController {
         }
     }
 
+    /**
+     * Phase 3: applies a fresh multiplayer snapshot IN PLACE. Rebuilding all 225
+     * tiles for every server update (the first approach) made each move feel
+     * slow; instead every existing tile re-points at the new game copy, and only
+     * the lightweight overlay (HUD labels, chips, buttons) is rebuilt. The camera
+     * stays exactly where it was. from/to non-null = my own accepted move: a
+     * short marker slide shows it instead of a silent teleport.
+     */
+    public void refreshFromSnapshot(Pair<Integer, Integer> from, Pair<Integer, Integer> to) {
+        hideUnitPopup();
+        // my own move: slide the marker over the OLD board first (the unit still
+        // stands on its source hex there), and only then apply the new state -
+        // otherwise the unit teleports and the marker trails after it, backwards
+        if (from != null && to != null) {
+            slideMoveMarker(from, to, this::applySnapshotNow);
+        } else {
+            applySnapshotNow();
+        }
+    }
+
+    private void applySnapshotNow() {
+        LandController.updateLandVisibility();
+        for (int i = 0; i < Consts.MAP_SIZE.amount.x; i++)
+            for (int j = 0; j < Consts.MAP_SIZE.amount.y; j++)
+                graphicalMap[i][j].rebind();
+
+        overlayLayer.removeAll();
+        buildHud();
+        buildBottomPanels();
+        buildZoomControls();
+        hudPanel.setBounds(0, 0, root.getWidth(), 46);
+        updateHud();
+        overlayLayer.revalidate();
+        overlayLayer.repaint();
+    }
+
+    /** Quick straight-line slide of a marker between two hexes (~0.3s), purely visual. */
+    private void slideMoveMarker(Pair<Integer, Integer> from, Pair<Integer, Integer> to, Runnable onDone) {
+        double zoom = ZOOM_LEVELS[zoomIndex];
+        Pair<Double, Double> a = graphicalMap[from.x][from.y].getCenterCoordinate();
+        Pair<Double, Double> b = graphicalMap[to.x][to.y].getCenterCoordinate();
+        JPanel marker = new JPanel();
+        marker.setBackground(new Color(0xffe066));
+        marker.setBorder(BorderFactory.createLineBorder(new Color(0x7a5c00), 2));
+        int size = (int) (28 * zoom);
+        mapPane.add(marker);
+        mapPane.setComponentZOrder(marker, 0);
+        final int steps = 8;
+        final int[] step = {0};
+        Timer timer = new Timer(35, e -> {
+            double t = Math.min(1.0, step[0] / (double) steps);
+            double x = a.x + (b.x - a.x) * t;
+            double y = a.y + (b.y - a.y) * t;
+            marker.setBounds((int) (x * zoom - size / 2.0), (int) (y * zoom - size / 2.0), size, size);
+            mapPane.repaint();
+            if (step[0]++ >= steps) {
+                ((Timer) e.getSource()).stop();
+                mapPane.remove(marker);
+                mapPane.repaint();
+                if (onDone != null) onDone.run();
+            }
+        });
+        timer.start();
+    }
+
     public void updateHud() {
         Nation nation = GameController.getCurrentTurnUser().getNation();
 
@@ -2180,6 +2250,45 @@ public class GamePlayController extends ViewController {
         dialog.setVisible(true);
     }
 
+    /**
+     * Demo shortcuts for showing rare scenarios fast (P3-58). Every action is a
+     * server request: host-only, applied to the authoritative game, announced
+     * to all players in the next broadcast - never a silent local edit.
+     */
+    private void showMultiplayerDemoDialog() {
+        JDialog dialog = new JDialog(SwingUtilities.getWindowAncestor(root), "Demo Actions");
+        JPanel panel = new JPanel();
+        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+        panel.setBorder(BorderFactory.createEmptyBorder(10, 12, 10, 12));
+
+        JLabel note = new JLabel("<html>Host-only, executed by the SERVER and announced to every player.<br>"
+                + "For demoing scenarios fast (war, elimination, trades).</html>");
+        note.setForeground(new Color(0x888888));
+        panel.add(note);
+        panel.add(Box.createVerticalStrut(8));
+
+        String[][] actions = {
+                {sut.civilization.Network.Messages.DebugActionRequest.RESOURCES, "Fill my storage with resources"},
+                {sut.civilization.Network.Messages.DebugActionRequest.TELEPORT_TO_ENEMY, "Teleport my soldier next to the enemy Town Hall"},
+                {sut.civilization.Network.Messages.DebugActionRequest.WEAKEN_ENEMY_TH, "Set the enemy Town Hall HP to 15"},
+                {sut.civilization.Network.Messages.DebugActionRequest.REFRESH_AP, "Refill my units' AP"},
+                {sut.civilization.Network.Messages.DebugActionRequest.CLEAR_HOSTILES, "Remove all bears / barbarians / camps"},
+        };
+        for (String[] action : actions) {
+            JButton b = new JButton(action[1]);
+            b.setAlignmentX(Component.LEFT_ALIGNMENT);
+            b.addActionListener(e -> { MultiplayerSession.get().sendDebugAction(action[0]); dialog.dispose(); });
+            panel.add(b);
+            panel.add(Box.createVerticalStrut(4));
+        }
+
+        dialog.setModalityType(Dialog.ModalityType.APPLICATION_MODAL);
+        dialog.add(new JScrollPane(panel));
+        dialog.setSize(420, 320);
+        dialog.setLocationRelativeTo(root);
+        dialog.setVisible(true);
+    }
+
     /** MP Town Hall: train units through the server (the spec's build-then-fight flow). */
     private void showMultiplayerTownHallDialog() {
         Nation mine = Game.instance.getLoggedInUser().getNation();
@@ -2220,13 +2329,42 @@ public class GamePlayController extends ViewController {
             row.add(train);
             panel.add(row);
         }
-        JLabel hint = new JLabel("Upgrades and research are not networked yet.");
-        hint.setForeground(new Color(0x888888));
-        panel.add(hint);
+        panel.add(new JSeparator());
+        JPanel upgradeRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
+        upgradeRow.add(new JLabel(th.getLevel() >= 3 ? "Town Hall is at max level."
+                : th.getLevel() == 1 ? "Upgrade to Settlement (lvl 2)  -  50 wood + 50 stone, 3 turns"
+                : "Upgrade to Capital (lvl 3)  -  100 stone + 50 iron, 5 turns"));
+        if (th.getLevel() < 3) {
+            JButton upgrade = new JButton("Upgrade");
+            upgrade.addActionListener(e -> { MultiplayerSession.get().sendUpgradeTownHall(); dialog.dispose(); });
+            upgradeRow.add(upgrade);
+        }
+        panel.add(upgradeRow);
+
+        panel.add(new JSeparator());
+        JLabel researchHeader = new JLabel("Research (server-validated, one production at a time):");
+        researchHeader.setFont(new Font("SansSerif", Font.BOLD, 12));
+        panel.add(researchHeader);
+        Nation myNation = Game.instance.getLoggedInUser().getNation();
+        for (TechnologyType tech : TechnologyType.values()) {
+            if (myNation.hasTechnology(tech)) continue; // done - nothing to click
+            JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
+            StringBuilder info = new StringBuilder(tech.name + "  -  ");
+            if (tech.woodCost > 0) info.append(tech.woodCost).append(" wood ");
+            if (tech.stoneCost > 0) info.append(tech.stoneCost).append(" stone ");
+            if (tech.ironCost > 0) info.append(tech.ironCost).append(" iron ");
+            info.append(", ").append(tech.turnsToResearch).append(" turns");
+            if (tech.requiredTownHallLevel > 1) info.append(", needs TH level ").append(tech.requiredTownHallLevel);
+            row.add(new JLabel(info.toString()));
+            JButton research = new JButton("Research");
+            research.addActionListener(e -> { MultiplayerSession.get().sendResearch(tech.name); dialog.dispose(); });
+            row.add(research);
+            panel.add(row);
+        }
 
         dialog.setModalityType(Dialog.ModalityType.APPLICATION_MODAL);
         dialog.add(new JScrollPane(panel));
-        dialog.setSize(470, 380);
+        dialog.setSize(520, 560);
         dialog.setLocationRelativeTo(root);
         dialog.setVisible(true);
     }

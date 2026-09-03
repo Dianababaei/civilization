@@ -35,7 +35,9 @@ public class LandGraphical extends JComponent {
     private static final int LOCAL_H = (int) (tileRadius * Math.sqrt(3));
     private static final Polygon LOCAL_HEX = buildLocalHex();
 
-    private final Land land;
+    // not final since phase 3: a multiplayer snapshot swaps Game.instance, and this
+    // tile must then re-point at the NEW Land object at its coordinate (rebind())
+    private Land land;
     private Pair<Integer, Integer> coordinate;
     private final Pair<Double, Double> centerCoordinate = new Pair<>(0.0, 0.0);
 
@@ -114,6 +116,17 @@ public class LandGraphical extends JComponent {
         pane.add(this);
     }
 
+    /**
+     * Phase 3: after a server snapshot replaced Game.instance, the old Land this
+     * tile pointed at belongs to a thrown-away copy. Re-read the new one and
+     * repaint - the terrain image too, because the fog can hide or reveal it.
+     */
+    public void rebind() {
+        land = Game.instance.map[coordinate.x][coordinate.y];
+        terrainImage = loadImage("/sut/civilization/Images/tiles/" + land.getLandType().name + ".png");
+        updateMap();
+    }
+
     /** Rescales and repositions this tile for the given discrete zoom level. */
     public void setZoom(double scale) {
         this.zoomScale = scale;
@@ -169,7 +182,11 @@ public class LandGraphical extends JComponent {
     }
 
     public void updateMap() {
-        StringBuilder landInfo = new StringBuilder(land.getLandType().name + " at (" + land.getI() + " , " + land.getJ() + ")");
+        // phase 3: a never-seen hex must not tell the player anything (the server
+        // already strips its data from multiplayer snapshots - P3-19)
+        StringBuilder landInfo = new StringBuilder(land.getVisibility() == 0
+                ? "Unexplored (" + land.getI() + " , " + land.getJ() + ")"
+                : land.getLandType().name + " at (" + land.getI() + " , " + land.getJ() + ")");
 
         // phase 2: volcano hexes are a visually distinct mountain subtype
         if (land.isVolcano()) {

@@ -76,7 +76,12 @@ public class MultiplayerSession implements NetworkManager.Listener {
 
     // ── requests (the game screen calls these instead of local controllers) ──
 
+    /** My last move request, remembered so the next snapshot can animate it. */
+    private Pair<Integer, Integer> pendingMoveFrom, pendingMoveTo;
+
     public void sendMove(Pair<Integer, Integer> from, int toX, int toY) {
+        pendingMoveFrom = new Pair<>(from.x, from.y);
+        pendingMoveTo = new Pair<>(toX, toY);
         network.send(new MoveUnitRequest(from.x, from.y, toX, toY));
     }
 
@@ -125,6 +130,18 @@ public class MultiplayerSession implements NetworkManager.Listener {
         network.send(new sut.civilization.Network.Messages.TrainUnitRequest(unitName));
     }
 
+    public void sendDebugAction(String action) {
+        network.send(new sut.civilization.Network.Messages.DebugActionRequest(action));
+    }
+
+    public void sendUpgradeTownHall() {
+        network.send(new sut.civilization.Network.Messages.UpgradeTownHallRequest());
+    }
+
+    public void sendResearch(String techName) {
+        network.send(new sut.civilization.Network.Messages.ResearchRequest(techName));
+    }
+
     // ── server pushes (NetworkManager already put us on the EDT) ─────────────
 
     @Override
@@ -135,7 +152,10 @@ public class MultiplayerSession implements NetworkManager.Listener {
             ActionResultResponse result = (ActionResultResponse) message;
             // rejections must reach the player word for word; accepted moves are
             // visible on the map anyway, a popup for them would just be noise
-            if (!result.isOk()) showInfo(result.getText());
+            if (!result.isOk()) {
+                pendingMoveFrom = pendingMoveTo = null; // nothing to animate
+                showInfo(result.getText());
+            }
         } else if (message instanceof ChatBroadcast) {
             ChatBroadcast chat = (ChatBroadcast) message;
             chatLog.add("[" + chat.getTime() + "] " + chat.getSender() + ": " + chat.getText());
@@ -196,7 +216,17 @@ public class MultiplayerSession implements NetworkManager.Listener {
         TechnologyController.updateNextAvailableTechnologies();
         CityController.updateAffordableLands();
 
-        Game.instance.changeScene(Menus.GAME_MENU);
+        // once the game screen exists, apply updates IN PLACE (fast, camera
+        // untouched, own moves animated); the full scene build runs only for
+        // the very first snapshot that opens the match
+        sut.civilization.View.Graphical.GamePlayController screen =
+                sut.civilization.View.Graphical.GamePlayController.getInstance();
+        if (screen != null && screen.root != null && screen.root.isShowing()) {
+            screen.refreshFromSnapshot(pendingMoveFrom, pendingMoveTo);
+        } else {
+            Game.instance.changeScene(Menus.GAME_MENU);
+        }
+        pendingMoveFrom = pendingMoveTo = null;
 
         // end-of-round world report (seasons, disasters, starvation, ...)
         if (broadcast.getNotifications() != null && !broadcast.getNotifications().isEmpty()) {

@@ -3,6 +3,15 @@ package sut.civilization.Model.Classes;
 import sut.civilization.Model.ModulEnums.UnitStatus;
 
 public class Unit implements java.io.Serializable {
+    // P3-53: every server data entity carries a unique id (for referencing /
+    // targeting) and an exact creation stamp, regardless of how it is stored
+    private final String id = java.util.UUID.randomUUID().toString();
+    private final long createdAt = System.currentTimeMillis();
+
+    public String getId() { return id; }
+
+    public long getCreatedAt() { return createdAt; }
+
     protected Nation ownerNation;
     protected String name;
     protected Pair<Integer, Integer> location;

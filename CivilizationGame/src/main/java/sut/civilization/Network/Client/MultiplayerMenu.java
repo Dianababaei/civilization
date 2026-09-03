@@ -25,6 +25,14 @@ public class MultiplayerMenu {
         if (username == null || username.trim().isEmpty()) return;
         username = username.trim();
 
+        // P3-51: a new username registers this password on the server; joining
+        // again with the same name requires the same password
+        javax.swing.JPasswordField passwordField = new javax.swing.JPasswordField();
+        int answer = JOptionPane.showConfirmDialog(parent, passwordField,
+                "Password (new username = registers it):", JOptionPane.OK_CANCEL_OPTION);
+        if (answer != JOptionPane.OK_OPTION) return;
+        String password = new String(passwordField.getPassword());
+
         String host;
         int port;
         if (choice == 0) {
@@ -88,7 +96,7 @@ public class MultiplayerMenu {
 
         LobbyWindow lobby = new LobbyWindow(network, username, host + ":" + port);
         lobby.setVisible(true);
-        network.send(new JoinLobbyRequest(username));
+        network.send(new JoinLobbyRequest(username, password));
     }
 
     /** First port from `preferred` upward that nothing is listening on. */

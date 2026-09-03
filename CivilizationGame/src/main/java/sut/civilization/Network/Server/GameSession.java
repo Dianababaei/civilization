@@ -22,6 +22,7 @@ import sut.civilization.Network.Messages.AllianceReplyRequest;
 import sut.civilization.Network.Messages.AttackRequest;
 import sut.civilization.Network.Messages.BattleReportMessage;
 import sut.civilization.Network.Messages.BreakAllianceRequest;
+import sut.civilization.Network.Messages.DebugActionRequest;
 import sut.civilization.Network.Messages.DeclareWarRequest;
 import sut.civilization.Network.Messages.EndTurnRequest;
 import sut.civilization.Network.Messages.ErrorResponse;
@@ -113,6 +114,12 @@ public class GameSession {
                 result = handleBreakAlliance(handler, (BreakAllianceRequest) message, notifications);
             } else if (message instanceof TrainUnitRequest) {
                 result = handleTrainUnit(handler, (TrainUnitRequest) message);
+            } else if (message instanceof DebugActionRequest) {
+                result = handleDebugAction(handler, (DebugActionRequest) message, notifications);
+            } else if (message instanceof sut.civilization.Network.Messages.UpgradeTownHallRequest) {
+                result = handleUpgradeTownHall(handler);
+            } else if (message instanceof sut.civilization.Network.Messages.ResearchRequest) {
+                result = handleResearch(handler, (sut.civilization.Network.Messages.ResearchRequest) message);
             } else if (message instanceof TradeOfferRequest) {
                 result = handleTradeOffer(handler, (TradeOfferRequest) message);
             } else if (message instanceof TradeReplyRequest) {
@@ -350,6 +357,128 @@ public class GameSession {
                 .enqueueUnit(request.getUnitName());
         boolean ok = townHall != null && townHall.getProductionQueue().size() > queuedBefore;
         return new ActionResultResponse(ok, message);
+    }
+
+    /** Queues a technology research - same reuse pattern as unit training. */
+    private ActionResultResponse handleResearch(ClientHandler handler,
+                                                sut.civilization.Network.Messages.ResearchRequest request) {
+        String turnProblem = checkTurn(handler);
+        if (turnProblem != null) return new ActionResultResponse(false, turnProblem);
+
+        User user = userOf(handler);
+        GameController.setCurrentTurnUser(user);
+        TownHall townHall = user.getNation().getTownHall();
+        int queuedBefore = townHall == null ? 0 : townHall.getProductionQueue().size();
+        String message = sut.civilization.Controller.GameControllers.TownHallController
+                .researchTechnology(request.getTechName());
+        boolean ok = townHall != null && townHall.getProductionQueue().size() > queuedBefore;
+        return new ActionResultResponse(ok, message);
+    }
+
+    /** Queues the Town Hall upgrade - same reuse pattern as unit training. */
+    private ActionResultResponse handleUpgradeTownHall(ClientHandler handler) {
+        String turnProblem = checkTurn(handler);
+        if (turnProblem != null) return new ActionResultResponse(false, turnProblem);
+
+        User user = userOf(handler);
+        GameController.setCurrentTurnUser(user);
+        TownHall townHall = user.getNation().getTownHall();
+        int queuedBefore = townHall == null ? 0 : townHall.getProductionQueue().size();
+        String message = sut.civilization.Controller.GameControllers.TownHallController.upgradeTownHall();
+        boolean ok = townHall != null && townHall.getProductionQueue().size() > queuedBefore;
+        return new ActionResultResponse(ok, message);
+    }
+
+    // ── demo/cheat shortcuts for evaluation (P3-58, P3-48 rules) ─────────────
+
+    /**
+     * Host-only. Executed on the AUTHORITATIVE game and announced to every
+     * player in the broadcast - a cheat is never a secret and never local.
+     * These exist so evaluation scenarios (war, elimination, trades) can be
+     * demoed in minutes instead of playing twenty legitimate turns.
+     */
+    private ActionResultResponse handleDebugAction(ClientHandler handler, DebugActionRequest request, List<String> notifications) {
+        if (players.isEmpty() || players.get(0) != handler)
+            return new ActionResultResponse(false, "Only the host can use demo actions.");
+
+        User user = userOf(handler);
+        Nation nation = user.getNation();
+        String done;
+        switch (request.getAction() == null ? "" : request.getAction()) {
+            case DebugActionRequest.RESOURCES:
+                // +500 of each, clamped by the storage capacity - so effectively
+                // "fill the warehouses" (the cap itself stays a real game rule)
+                nation.getFood().add(500);
+                nation.getWood().add(500);
+                nation.getStone().add(500);
+                nation.getIron().add(500);
+                done = "filled their storage with resources";
+                break;
+            case DebugActionRequest.REFRESH_AP:
+                for (Unit unit : nation.getUnits()) unit.refreshAp();
+                done = "refilled their units' AP";
+                break;
+            case DebugActionRequest.CLEAR_HOSTILES:
+                for (int i = 0; i < Consts.MAP_SIZE.amount.x; i++)
+                    for (int j = 0; j < Consts.MAP_SIZE.amount.y; j++)
+                        Game.instance.map[i][j].setEnemy(null);
+                Game.instance.bearCalmUntilTurn = Game.instance.getTurn() + 999;
+                done = "removed every bear, barbarian and camp from the map";
+                break;
+            case DebugActionRequest.WEAKEN_ENEMY_TH: {
+                User enemy = firstOpponentOf(user);
+                if (enemy == null || enemy.getNation().getTownHall() == null)
+                    return new ActionResultResponse(false, "No enemy Town Hall to weaken.");
+                enemy.getNation().getTownHall().setHp(15);
+                done = "set " + enemy.getUsername() + "'s Town Hall HP to 15";
+                break;
+            }
+            case DebugActionRequest.TELEPORT_TO_ENEMY: {
+                CivilizedUnit soldier = null;
+                for (Unit unit : nation.getUnits())
+                    if (unit instanceof CivilizedUnit
+                            && ((CivilizedUnit) unit).getCivilizedUnitType().isMilitary) {
+                        soldier = (CivilizedUnit) unit;
+                        break;
+                    }
+                if (soldier == null)
+                    return new ActionResultResponse(false, "Train a military unit first - nothing to teleport.");
+                User enemy = firstOpponentOf(user);
+                if (enemy == null || enemy.getNation().getTownHall() == null)
+                    return new ActionResultResponse(false, "No enemy Town Hall to teleport to.");
+                Land thLand = enemy.getNation().getTownHall().getMainLand();
+                Pair<Integer, Integer> spot = null;
+                for (int k = 0; k < 6 && spot == null; k++) {
+                    Pair<Integer, Integer> hex = LandController.getNeighborIndex(
+                            new Pair<>(thLand.getI(), thLand.getJ()), k);
+                    if (!Pair.isValid(hex)) continue;
+                    Land tile = Game.instance.map[hex.x][hex.y];
+                    if (tile.getCivilizedUnit() == null && tile.getEnemy() == null) spot = hex;
+                }
+                if (spot == null) return new ActionResultResponse(false, "No free hex next to the enemy Town Hall.");
+                Pair<Integer, Integer> old = soldier.getLocation();
+                if (Pair.isValid(old) && Game.instance.map[old.x][old.y].getCivilizedUnit() == soldier)
+                    Game.instance.map[old.x][old.y].setCivilizedUnit(null);
+                soldier.getLocation().x = spot.x;
+                soldier.getLocation().y = spot.y;
+                Game.instance.map[spot.x][spot.y].setCivilizedUnit(soldier);
+                LandController.updateLandVisibility();
+                done = "teleported their " + soldier.getCivilizedUnitType().name
+                        + " next to " + enemy.getUsername() + "'s Town Hall";
+                break;
+            }
+            default:
+                return new ActionResultResponse(false, "Unknown demo action.");
+        }
+        notifications.add("DEMO CHEAT: " + user.getUsername() + " " + done + ".");
+        return new ActionResultResponse(true, "Done - " + done + " (announced to everyone).");
+    }
+
+    /** First other player still in the game, or null. */
+    private User firstOpponentOf(User user) {
+        for (User other : Game.instance.getPlayersInGame())
+            if (other != user && !Game.instance.isEliminated(other.getUsername())) return other;
+        return null;
     }
 
     // ── phase 3 PvP: diplomacy (P3-38..40) ───────────────────────────────────

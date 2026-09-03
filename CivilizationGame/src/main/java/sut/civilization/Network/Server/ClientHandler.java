@@ -73,10 +73,19 @@ public class ClientHandler extends Thread {
             // the only thing an unnamed connection may do is join;
             // the lobby answers with a JoinResultResponse itself
             if (message instanceof JoinLobbyRequest) {
-                lobby.join(this, ((JoinLobbyRequest) message).getUsername());
+                JoinLobbyRequest join = (JoinLobbyRequest) message;
+                lobby.join(this, join.getUsername(), join.getPassword());
             } else {
                 send(new ErrorResponse("Join the lobby first."));
             }
+            return;
+        }
+
+        // P3-51: after login EVERY request must carry a valid, unexpired token
+        // signed by this server - signature and expiry are checked each time
+        String tokenProblem = lobby.checkToken(message.getToken(), username);
+        if (tokenProblem != null) {
+            send(new ErrorResponse(tokenProblem));
             return;
         }
 

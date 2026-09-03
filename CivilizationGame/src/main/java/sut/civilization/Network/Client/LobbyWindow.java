@@ -150,6 +150,8 @@ public class LobbyWindow extends JFrame implements NetworkManager.Listener {
                 dispose();
             } else {
                 joined = true;
+                // P3-51: store the JWT - NetworkManager attaches it to every request
+                network.setAuthToken(join.getAuthToken());
             }
         } else if (message instanceof LobbyStateBroadcast) {
             showLobbyState((LobbyStateBroadcast) message);

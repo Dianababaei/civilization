@@ -122,7 +122,9 @@ public class DisasterController extends GameController {
                 + (townHallHit ? ", Town Hall damaged -" + EARTHQUAKE_TH_DAMAGE + " HP" : "")
                 + ". Area: " + area.size() + " hexes"
                 + (area.size() < 19 ? " (radius 2 clipped by the map edge)" : "") + ".";
-        notifyTurn(summary);
+        // a quake is news for whoever knows the area - not for a player whose
+        // fog still covers the epicenter
+        notifyTurnAt(center, summary);
         return summary;
     }
 
@@ -213,7 +215,7 @@ public class DisasterController extends GameController {
                 // nobody left to hunt: the bears go back into the forest
                 for (Enemy bear : bears) CombatController.removeEnemy(bear);
                 Game.instance.bearCalmUntilTurn = Game.instance.getTurn() + BEAR_CALM_TURNS;
-                notifyTurn("The bears returned to the forest. The area is calm for "
+                notifyTurnAt(den, "The bears returned to the forest. The area is calm for "
                         + BEAR_CALM_TURNS + " turns.");
             } else if (!nearDen.isEmpty() && Game.instance.getTurn() >= Game.instance.bearCalmUntilTurn) {
                 int wanted = nearDen.size() >= BEAR_CROWD_UNITS ? BEAR_MAX : 1;
@@ -222,7 +224,7 @@ public class DisasterController extends GameController {
                     if (spot == null) break;
                     Game.instance.map[spot.x][spot.y].setEnemy(
                             new Enemy(sut.civilization.Model.ModulEnums.EnemyType.BEAR, spot));
-                    notifyTurn("A BEAR came out of its den at (" + spot.x + "," + spot.y + ")!");
+                    notifyTurnAt(spot, "A BEAR came out of its den at (" + spot.x + "," + spot.y + ")!");
                 }
             }
         }
@@ -278,8 +280,8 @@ public class DisasterController extends GameController {
         bear.getLocation().y = best.y;
     }
 
-    /** P2-08: a unit at 0 HP is removed from the game immediately. */
-    static void removeDeadUnit(CivilizedUnit unit) {
+    /** P2-08: a unit at 0 HP is removed from the game immediately. Public since phase 3 (the server-side PvP combat needs it too). */
+    public static void removeDeadUnit(CivilizedUnit unit) {
         if (unit.isStationed()) {
             unit.getStationedIn().removeWorker(unit);
             unit.leaveStation();
@@ -289,6 +291,6 @@ public class DisasterController extends GameController {
             Game.instance.map[loc.x][loc.y].setCivilizedUnit(null);
         unit.getOwnerNation().removeUnit(unit);
         if (selectedCivilizedUnit == unit) selectedCivilizedUnit = null;
-        notifyTurn(unit.getCivilizedUnitType().name + " at (" + loc.x + "," + loc.y + ") was killed.");
+        notifyTurnFor(unit.getOwnerNation(), unit.getCivilizedUnitType().name + " at (" + loc.x + "," + loc.y + ") was killed.");
     }
 }

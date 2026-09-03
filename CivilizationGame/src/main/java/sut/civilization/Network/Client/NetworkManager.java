@@ -43,6 +43,12 @@ public class NetworkManager {
     private volatile boolean connected = false;
     private volatile int pingMs = -1;
     private final List<Listener> listeners = new CopyOnWriteArrayList<>();
+    /** P3-51: the JWT received at login, attached to every outgoing message. */
+    private volatile String authToken;
+
+    public void setAuthToken(String authToken) {
+        this.authToken = authToken;
+    }
 
     public void connect(String host, int port) throws IOException {
         socket = new Socket(host, port);
@@ -69,6 +75,8 @@ public class NetworkManager {
     /** Fire-and-forget: the server answers asynchronously through the listener. */
     public void send(Message message) {
         if (!connected) return;
+        // P3-51: every request after login carries the JWT for the server to verify
+        if (authToken != null) message.setToken(authToken);
         synchronized (out) {
             out.println(MessageCodec.encode(message));
         }

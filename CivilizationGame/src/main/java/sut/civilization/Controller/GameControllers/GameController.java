@@ -47,6 +47,84 @@ public class GameController extends Controller {
         return selectedCivilizedUnit.getName() + " is now selected";
     }
 
+    // ── Phase 3 win condition (P3-01): total domination ───────────────────────
+
+    /**
+     * Checks every player after combat: whoever's last Town Hall reached 0 HP is
+     * out of the game - all their remaining units and territory are removed at
+     * once (our design pick between "removed" and "abandoned"). When only one
+     * player is left standing they win. Returns the announcement lines; the
+     * multiplayer server puts them in the next broadcast so everyone hears it.
+     */
+    public static ArrayList<String> checkEliminations() {
+        ArrayList<String> notes = new ArrayList<>();
+        for (User user : Game.instance.getPlayersInGame()) {
+            if (Game.instance.isEliminated(user.getUsername())) continue;
+            Nation nation = user.getNation();
+            TownHall th = nation.getTownHall();
+            if (th == null || th.getHp() > 0) continue;
+
+            // wipe the fallen empire off the map
+            for (Unit unit : new ArrayList<>(nation.getUnits())) {
+                Pair<Integer, Integer> loc = unit.getLocation();
+                if (Pair.isValid(loc) && Game.instance.map[loc.x][loc.y].getCivilizedUnit() == unit)
+                    Game.instance.map[loc.x][loc.y].setCivilizedUnit(null);
+            }
+            nation.getUnits().clear();
+            nation.getTerritory().clear();
+            nation.setTownHall(null);
+            Game.instance.getEliminatedPlayers().add(user.getUsername());
+            notes.add(user.getUsername() + " has been ELIMINATED - their last Town Hall fell!");
+            cancelPendingDealsOf(user.getUsername());
+        }
+
+        // last player standing takes the match (only meaningful once someone fell)
+        if (Game.instance.getWinner() == null && !Game.instance.getEliminatedPlayers().isEmpty()) {
+            ArrayList<User> alive = new ArrayList<>();
+            for (User user : Game.instance.getPlayersInGame())
+                if (!Game.instance.isEliminated(user.getUsername())) alive.add(user);
+            if (alive.size() == 1) {
+                Game.instance.setWinner(alive.get(0).getUsername());
+                notes.add(alive.get(0).getUsername() + " WINS the game - total domination!");
+            }
+        }
+        return notes;
+    }
+
+    public static User findPlayer(String username) {
+        for (User user : Game.instance.getPlayersInGame())
+            if (user.getUsername().equals(username)) return user;
+        return null;
+    }
+
+    /**
+     * Kills every pending trade/alliance offer involving this player - they were
+     * eliminated or dropped, and locked resources must never stay locked forever.
+     * A still-living sender gets their lock refunded.
+     */
+    public static void cancelPendingDealsOf(String username) {
+        for (TradeOffer offer : Game.instance.getTradeOffers()) {
+            if (!offer.isPending()) continue;
+            if (offer.from.equals(username)) {
+                offer.setStatus(TradeOffer.CANCELLED);
+            } else if (offer.to.equals(username)) {
+                offer.setStatus(TradeOffer.CANCELLED);
+                User sender = findPlayer(offer.from);
+                if (sender != null) refundLockedResources(sender.getNation(), offer);
+            }
+        }
+        Game.instance.getAllianceOffers().remove(username);
+        Game.instance.getAllianceOffers().entrySet().removeIf(e -> e.getValue().equals(username));
+    }
+
+    /** Gives a trade offer's locked resources back to the sender (reject/cancel, P3-37). */
+    public static void refundLockedResources(Nation nation, TradeOffer offer) {
+        nation.getFood().add(offer.giveFood);
+        nation.getWood().add(offer.giveWood);
+        nation.getStone().add(offer.giveStone);
+        nation.getIron().add(offer.giveIron);
+    }
+
     // ── Turn readiness ────────────────────────────────────────────────────────
     // if units still have AP left we just warn the player, we don't block ending turn.
     // the actual warning popup is in GamePlayController.nextTurn(), this here just
@@ -80,6 +158,42 @@ public class GameController extends Controller {
     public static final ArrayList<String> turnNotifications = new ArrayList<>();
 
     static void notifyTurn(String msg) { turnNotifications.add(msg); }
+
+    /**
+     * Phase 3: a note that belongs to ONE player (their unit was attacked, their
+     * starvation, their finished training). In multiplayer the server must not
+     * broadcast someone's private news to everyone - fog of war applies to news
+     * too - so the note is tagged "@username::" and GameSession delivers it only
+     * to its owner. Single player keeps the plain text.
+     */
+    static void notifyTurnFor(Nation nation, String msg) {
+        String name = nameOf(nation);
+        if (name == null || Game.instance.getPlayersInGame().size() <= 1) {
+            notifyTurn(msg);
+        } else {
+            turnNotifications.add("@" + name + "::" + msg);
+        }
+    }
+
+    public static String nameOf(Nation nation) {
+        for (User user : Game.instance.getPlayersInGame())
+            if (user.getNation() == nation) return user.getUsername();
+        return null;
+    }
+
+    /**
+     * Phase 3: a note about one PLACE (a quake epicenter, a bear den). In
+     * multiplayer only players who have actually explored that hex hear about
+     * it - no phantom news about spots still under your fog. Tagged "@@x,y::";
+     * GameSession checks each receiver's map knowledge. Single player is plain.
+     */
+    static void notifyTurnAt(Pair<Integer, Integer> hex, String msg) {
+        if (hex == null || !Pair.isValid(hex) || Game.instance.getPlayersInGame().size() <= 1) {
+            notifyTurn(msg);
+        } else {
+            turnNotifications.add("@@" + hex.x + "," + hex.y + "::" + msg);
+        }
+    }
 
     public static void nextGameTurn() {
         turnNotifications.clear();
@@ -144,9 +258,9 @@ public class GameController extends Controller {
             boolean starving = nation.getFood().getNetRate() < 0
                     && nation.getFood().getBalance() < 0;
             if (starving && !nation.isInStarvation())
-                notifyTurn("STARVATION started - population growth frozen, units lose AP!");
+                notifyTurnFor(nation, "STARVATION started - population growth frozen, units lose AP!");
             else if (!starving && nation.isInStarvation())
-                notifyTurn("Starvation is over.");
+                notifyTurnFor(nation, "Starvation is over.");
             nation.setInStarvation(starving);
 
             // population growth stops while starving
@@ -162,10 +276,10 @@ public class GameController extends Controller {
                     : nation.getHappiness() <= -3 ? -1 : 0;
             if (tier != nation.getLastHappinessTier()) {
                 switch (tier) {
-                    case 1:  notifyTurn("GOLDEN AGE! Production +10% while happiness stays at +3 or more."); break;
-                    case -1: notifyTurn("Strikes! Every stationed worker produces 1 less."); break;
-                    case -2: notifyTurn("RIOT! Workers strike AND all units lose 1 AP per turn."); break;
-                    default: notifyTurn("Happiness is back to normal."); break;
+                    case 1:  notifyTurnFor(nation, "GOLDEN AGE! Production +10% while happiness stays at +3 or more."); break;
+                    case -1: notifyTurnFor(nation, "Strikes! Every stationed worker produces 1 less."); break;
+                    case -2: notifyTurnFor(nation, "RIOT! Workers strike AND all units lose 1 AP per turn."); break;
+                    default: notifyTurnFor(nation, "Happiness is back to normal."); break;
                 }
                 nation.setLastHappinessTier(tier);
             }
@@ -265,7 +379,7 @@ public class GameController extends Controller {
                     worker.leaveStation();
                 }
                 tile.setImprovement(null);
-                notifyTurn(type.name + " at (" + hex.x + "," + hex.y + ") collapsed - its deposit ran dry.");
+                notifyTurnFor(nation, type.name + " at (" + hex.x + "," + hex.y + ") collapsed - its deposit ran dry.");
                 continue;
             }
 
@@ -290,7 +404,7 @@ public class GameController extends Controller {
                         worker.leaveStation();
                     }
                     tile.setImprovement(null);
-                    notifyTurn(type.name + " at (" + hex.x + "," + hex.y + ") was destroyed - 3 missed upkeep payments.");
+                    notifyTurnFor(nation, type.name + " at (" + hex.x + "," + hex.y + ") was destroyed - 3 missed upkeep payments.");
                 }
             } else {
                 imp.resetMissedUpkeep();
@@ -358,11 +472,11 @@ public class GameController extends Controller {
         switch (finished.getKind()) {
             case RESEARCH_TECH:
                 townHall.applyResearch(finished.getTech());
-                notifyTurn("Research complete: " + finished.getTech().name + ".");
+                notifyTurnFor(nation, "Research complete: " + finished.getTech().name + ".");
                 return;
             case UPGRADE_TOWN_HALL:
                 townHall.applyLevelUp(finished.getTargetLevel());
-                notifyTurn("Town Hall upgraded to " + townHall.getLevelName()
+                notifyTurnFor(nation, "Town Hall upgraded to " + townHall.getLevelName()
                         + " (level " + townHall.getLevel() + ")!");
                 return;
             case TRAIN_UNIT:
@@ -400,7 +514,7 @@ public class GameController extends Controller {
                 new Pair<>(spawnTile.getI(), spawnTile.getJ()));
         spawnTile.setCivilizedUnit(newUnit);
         nation.addUnit(newUnit);
-        notifyTurn(trained.name + " trained and ready at (" + spawnTile.getI() + "," + spawnTile.getJ() + ").");
+        notifyTurnFor(nation, trained.name + " trained and ready at (" + spawnTile.getI() + "," + spawnTile.getJ() + ").");
     }
 
     // ── fog of war update ──────────────────────────────────────────────────────

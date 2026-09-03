@@ -30,27 +30,48 @@ public class Lobby {
     private boolean started = false;
     private GameSession session = null;
 
+    // ── P3-51 bonus: password accounts + JWT ─────────────────────────────────
+    // first login with a username registers its password; later logins must
+    // match. A successful login gets a signed token that every later request
+    // must carry (ClientHandler checks it via checkToken)
+    private final java.util.Map<String, String> accounts = new java.util.HashMap<>();
+    private final TokenService tokenService = new TokenService();
+
+    /** Null when the token authenticates this username, otherwise the complaint. */
+    public String checkToken(String token, String username) {
+        return tokenService.check(token, username);
+    }
+
     /**
      * Answers the handler itself (accept or reject) so the JoinResultResponse
      * always reaches the client BEFORE the first lobby broadcast.
      */
-    public synchronized void join(ClientHandler handler, String username) {
+    public synchronized void join(ClientHandler handler, String username, String password) {
         String reason = null;
         String name = username == null ? "" : username.trim();
+        String pass = password == null ? "" : password;
         if (started) reason = "The game has already started, you can not join anymore.";
         else if (name.isEmpty()) reason = "Username can not be empty.";
-        else for (ClientHandler p : players)
+        else {
+            for (ClientHandler p : players)
                 if (p.getUsername().equalsIgnoreCase(name)) {
                     reason = "The username \"" + name + "\" is already taken.";
                     break;
                 }
+            String knownPassword = accounts.get(name.toLowerCase());
+            if (reason == null && knownPassword != null && !knownPassword.equals(pass))
+                reason = "Wrong password for \"" + name + "\".";
+        }
         if (reason != null) {
             handler.send(new JoinResultResponse(false, reason, null, false));
             return;
         }
+        accounts.putIfAbsent(name.toLowerCase(), pass);
         handler.setUsername(name);
         players.add(handler);
-        handler.send(new JoinResultResponse(true, null, name, isHost(handler)));
+        boolean host = isHost(handler);
+        String token = tokenService.issue(name, host ? "host" : "player");
+        handler.send(new JoinResultResponse(true, null, name, host, token));
         announce(name + " joined the lobby.");
         broadcastState();
     }

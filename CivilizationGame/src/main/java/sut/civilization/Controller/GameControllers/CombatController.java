@@ -33,6 +33,9 @@ public class CombatController extends GameController {
         /** One line per compared pair (plus explanation lines for no-dice damage). */
         public final ArrayList<String> lines = new ArrayList<>();
         public String summary = "";
+        /** Phase 3: whose units/buildings were attacked - the multiplayer server
+         *  routes enemy-turn battle dialogs to this player (never to the others). */
+        public Nation victim = null;
     }
 
     /**
@@ -198,6 +201,108 @@ public class CombatController extends GameController {
         return report;
     }
 
+    // ── Phase 3 PvP attacks (P3-31..33) ───────────────────────────────────────
+
+    /**
+     * Flat damage against opponent BUILDINGS (P3-33) - the dice system is skipped
+     * there. The phase 3 spec pins these exact numbers (Swordsman 10, Archer 6,
+     * Cavalry 9); note Cavalry's dice-battle attackPower stays 8 from phase 2,
+     * the 9 only applies to structures.
+     */
+    public static int structureDamageOf(CivilizedUnitType type) {
+        switch (type) {
+            case SWORDSMAN: return 10;
+            case ARCHER: return 6;
+            case CAVALRY: return 9;
+            default: return 0;
+        }
+    }
+
+    /**
+     * Why this attacker can't attack that hex in a PvP match, or null if it can.
+     * Diplomacy ("are these two players at war?") is the server's job and is
+     * checked before this is called. Deliberately does NOT look at the tile
+     * visibility flags - on the authoritative server map they belong to no
+     * particular viewer.
+     */
+    public static String checkCanAttackHexPvp(CivilizedUnit attacker, Pair<Integer, Integer> target) {
+        if (attacker == null) return "Select a unit first!";
+        CivilizedUnitType type = attacker.getCivilizedUnitType();
+        if (!type.isMilitary) return "Only military units can attack!";
+        if (!attacker.hasAp()) return "No AP left!";
+        int distance = hexDistance(attacker.getLocation(), target);
+        if (distance > type.attackRange) return "Target is out of range!";
+        if (distance == 2 && type != CivilizedUnitType.ARCHER)
+            return "Only Archers can attack at distance 2!";
+        return null;
+    }
+
+    /**
+     * Resolves one PvP attack against the hex (P3-32/33): if a defending unit
+     * stands there it is a dice battle (one die per unit on each side, ties favor
+     * the defender); otherwise, if the hex is the defender's Town Hall, the
+     * building takes flat type damage - no dice. Call
+     * {@link #checkCanAttackHexPvp} first. Every attack costs the attacker 1 AP.
+     */
+    public static BattleReport pvpAttack(CivilizedUnit attacker, Pair<Integer, Integer> target, Nation defenderNation, String defenderName) {
+        Land tile = Game.instance.map[target.x][target.y];
+        CivilizedUnitType type = attacker.getCivilizedUnitType();
+        attacker.spendAp(1); // spec: starting an attack costs 1 AP per attacking unit
+
+        BattleReport report = new BattleReport();
+        CivilizedUnit defender = tile.getCivilizedUnit();
+
+        if (defender != null && defender.getOwnerNation() == defenderNation) {
+            // unit vs unit dice battle: each participating unit rolls one d6 (P3-32)
+            String defenderLabel = defenderName + "'s " + defender.getCivilizedUnitType().name;
+            report.title = type.name + " attacks " + defenderLabel;
+            report.attackerDice = rollDice(1);
+            report.defenderDice = rollDice(1);
+            int[] hits = comparePairs(report.attackerDice, report.defenderDice);
+            describePairs(report, type.name, defenderLabel);
+
+            if (hits[0] > 0) {
+                defender.setHp(defender.getHp() - hits[0]);
+                if (defender.getHp() <= 0) {
+                    DisasterController.removeDeadUnit(defender);
+                    report.summary = defenderLabel + " is killed!";
+                } else {
+                    report.summary = defenderLabel + " HP: " + defender.getHp() + "/" + defender.getCivilizedUnitType().maxHp;
+                }
+            }
+            if (hits[1] > 0) {
+                attacker.setHp(attacker.getHp() - hits[1]);
+                if (attacker.getHp() <= 0) {
+                    DisasterController.removeDeadUnit(attacker);
+                    report.summary = (report.summary.isEmpty() ? "" : report.summary + " ")
+                            + "The attacking " + type.name + " died in the battle!";
+                } else {
+                    report.summary = (report.summary.isEmpty() ? "" : report.summary + " ")
+                            + "Attacking " + type.name + " HP: " + attacker.getHp() + "/" + type.maxHp;
+                }
+            }
+            return report;
+        }
+
+        // no defending unit: the building on the hex takes flat damage (P3-33)
+        TownHall th = defenderNation.getTownHall();
+        if (th != null && th.getMainLand() == tile) {
+            int damage = structureDamageOf(type);
+            th.setHp(th.getHp() - damage);
+            report.title = type.name + " attacks " + defenderName + "'s Town Hall";
+            report.lines.add("Attacks on buildings skip the dice - flat damage by unit type (Swordsman 10, Archer 6, Cavalry 9).");
+            report.lines.add(type.name + " deals " + damage + " damage.");
+            report.summary = th.getHp() <= 0
+                    ? defenderName + "'s Town Hall is DESTROYED!"
+                    : defenderName + "'s Town Hall HP: " + th.getHp() + "/" + th.getMaxHp();
+            return report;
+        }
+
+        report.title = "Attack on (" + target.x + "," + target.y + ")";
+        report.summary = "Nothing there to attack.";
+        return report;
+    }
+
     private static void describePairs(BattleReport report, String attackerName, String defenderName) {
         int pairs = Math.min(report.attackerDice.length, report.defenderDice.length);
         for (int p = 0; p < pairs; p++) {
@@ -263,6 +368,7 @@ public class CombatController extends GameController {
     /** Barbarian attack = a normal dice battle where WE are the defender with 2 dice. */
     private static BattleReport barbarianAttacksUnit(Enemy barbarian, CivilizedUnit defender) {
         BattleReport report = new BattleReport();
+        report.victim = defender.getOwnerNation();
         String defenderName = "your " + defender.getCivilizedUnitType().name;
         report.title = "Barbarian attacks " + defenderName + " at ("
                 + defender.getLocation().x + "," + defender.getLocation().y + ")";
@@ -292,7 +398,7 @@ public class CombatController extends GameController {
                         + "Barbarian HP: " + barbarian.getHp() + "/" + EnemyType.BARBARIAN.maxHp;
             }
         }
-        notifyTurn(report.title + " - " + report.summary);
+        notifyTurnFor(defender.getOwnerNation(), report.title + " - " + report.summary);
         return report;
     }
 
@@ -300,6 +406,7 @@ public class CombatController extends GameController {
      *  Called from DisasterController.bearTurn(), which handles movement and targeting. */
     static BattleReport bearAttacksUnit(Enemy bear, CivilizedUnit defender) {
         BattleReport report = new BattleReport();
+        report.victim = defender.getOwnerNation();
         CivilizedUnitType type = defender.getCivilizedUnitType();
         report.title = "Bear attacks your " + type.name + " at ("
                 + defender.getLocation().x + "," + defender.getLocation().y + ")";
@@ -317,7 +424,7 @@ public class CombatController extends GameController {
         } else {
             report.summary = "Your " + type.name + " HP: " + defender.getHp() + "/" + type.maxHp;
         }
-        notifyTurn(report.title + " - " + report.summary);
+        notifyTurnFor(defender.getOwnerNation(), report.title + " - " + report.summary);
         return report;
     }
 
@@ -325,9 +432,11 @@ public class CombatController extends GameController {
     private static BattleReport enemyAttacksTownHall(Enemy enemy, Land townHallTile) {
         BattleReport report = new BattleReport();
         report.title = enemy.getType().name + " attacks your Town Hall!";
+        Nation victim = null;
         for (User u : Game.instance.getPlayersInGame()) {
             TownHall th = u.getNation().getTownHall();
             if (th != null && th.getMainLand() == townHallTile) {
+                victim = u.getNation();
                 // P2-07: the Town Hall's defense soaks damage (10 base, 30 with the
                 // Defensive Architecture wall) - but every attack still chips at least 1
                 int damage = Math.max(1, enemy.getType().attackPower - th.getDefense());
@@ -340,7 +449,9 @@ public class CombatController extends GameController {
                 report.summary = "Town Hall HP: " + th.getHp() + "/" + th.getMaxHp();
             }
         }
-        notifyTurn(report.title + " - " + report.summary);
+        report.victim = victim;
+        if (victim != null) notifyTurnFor(victim, report.title + " - " + report.summary);
+        else notifyTurn(report.title + " - " + report.summary);
         return report;
     }
 

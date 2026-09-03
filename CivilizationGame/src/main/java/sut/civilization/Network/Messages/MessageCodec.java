@@ -40,6 +40,9 @@ public class MessageCodec {
         register(TradeReplyRequest.TYPE, TradeReplyRequest.class);
         register(BattleReportMessage.TYPE, BattleReportMessage.class);
         register(TrainUnitRequest.TYPE, TrainUnitRequest.class);
+        register(DebugActionRequest.TYPE, DebugActionRequest.class);
+        register(UpgradeTownHallRequest.TYPE, UpgradeTownHallRequest.class);
+        register(ResearchRequest.TYPE, ResearchRequest.class);
     }
 
     private static void register(String type, Class<? extends Message> clazz) {

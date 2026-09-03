@@ -8,6 +8,14 @@ import java.util.UUID;
  * live here and every message inherits them.
  */
 public abstract class Message {
+
+    /** P3-51 bonus: the JWT the client attaches after login; null before it. */
+    private String token;
+
+    public String getToken() { return token; }
+
+    public void setToken(String token) { this.token = token; }
+
     private final String type;
     private final String id;
     private final long createdAt;

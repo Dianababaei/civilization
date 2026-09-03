@@ -7,6 +7,15 @@ import java.util.ArrayDeque;
 import java.util.Deque;
 
 public class TownHall implements java.io.Serializable {
+    // P3-53: every server data entity carries a unique id (for referencing /
+    // targeting) and an exact creation stamp, regardless of how it is stored
+    private final String id = java.util.UUID.randomUUID().toString();
+    private final long createdAt = System.currentTimeMillis();
+
+    public String getId() { return id; }
+
+    public long getCreatedAt() { return createdAt; }
+
 
     private static final int SAFEGUARD_FOOD_PER_TURN = 1;
     private static final int SAFEGUARD_WOOD_PER_TURN = 1;
