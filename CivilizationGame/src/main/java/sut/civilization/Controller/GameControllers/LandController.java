@@ -329,7 +329,11 @@ public class LandController extends Controller {
                 }
             }
 
-            // put starting units on tiles next to town hall (not on the town hall tile itself)
+            // put starting units on tiles next to town hall (not on the town hall tile
+            // itself). A spot must be free AND passable - the raw offsets are not hex
+            // neighbors on every column parity, and a unit dropped on an impassable
+            // mountain range is stuck for the whole game (found by Phase3UiDriver).
+            // Falls back to nearby hexes when a preferred spot is unusable
             int[][] startOffsets = { {-1,-1}, {-1,0}, {0,-1}, {0,1}, {1,0} };
             CivilizedUnitType[] startTypes = {
                 CivilizedUnitType.EXPLORER,
@@ -338,11 +342,23 @@ public class LandController extends Controller {
                 CivilizedUnitType.WORKER,
                 CivilizedUnitType.WORKER
             };
-            for (int s = 0; s < startTypes.length; s++) {
-                Pair<Integer, Integer> loc = new Pair<>(thCoord.x + startOffsets[s][0], thCoord.y + startOffsets[s][1]);
-                // skip if out of bounds or something's already there
-                if (!Pair.isValid(loc) || map[loc.x][loc.y].getCivilizedUnit() != null) continue;
-                CivilizedUnit unit = new CivilizedUnit(startTypes[s], nation, loc);
+            ArrayList<Pair<Integer, Integer>> spots = new ArrayList<>();
+            for (int[] off : startOffsets) spots.add(new Pair<>(thCoord.x + off[0], thCoord.y + off[1]));
+            for (Pair<Integer, Integer> hex : DisasterController.hexesInRadius(thCoord, 2))
+                if (!spots.contains(hex)) spots.add(hex);
+            int spotIndex = 0;
+            for (CivilizedUnitType type : startTypes) {
+                Pair<Integer, Integer> loc = null;
+                while (spotIndex < spots.size() && loc == null) {
+                    Pair<Integer, Integer> candidate = spots.get(spotIndex++);
+                    if (!Pair.isValid(candidate) || candidate.equals(thCoord)) continue;
+                    Land tile = map[candidate.x][candidate.y];
+                    if (tile.getCivilizedUnit() != null) continue;
+                    if (tile.getLandType() == LandType.MOUNTAIN_RANGE) continue;
+                    loc = candidate;
+                }
+                if (loc == null) break; // pathological map: fewer starting units beats stuck ones
+                CivilizedUnit unit = new CivilizedUnit(type, nation, loc);
                 map[loc.x][loc.y].setCivilizedUnit(unit);
                 nation.getUnits().add(unit);
             }
