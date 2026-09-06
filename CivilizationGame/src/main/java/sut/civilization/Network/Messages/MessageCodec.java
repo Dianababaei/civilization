@@ -43,6 +43,8 @@ public class MessageCodec {
         register(DebugActionRequest.TYPE, DebugActionRequest.class);
         register(UpgradeTownHallRequest.TYPE, UpgradeTownHallRequest.class);
         register(ResearchRequest.TYPE, ResearchRequest.class);
+        register(BuildImprovementRequest.TYPE, BuildImprovementRequest.class);
+        register(StationRequest.TYPE, StationRequest.class);
     }
 
     private static void register(String type, Class<? extends Message> clazz) {

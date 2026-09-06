@@ -632,6 +632,18 @@ public class Phase3Driver {
         return null;
     }
 
+    /** Test rig: moves a unit to a hex directly on the server's map (no pathfinding). */
+    static void relocate(sut.civilization.Model.Classes.CivilizedUnit unit,
+                         sut.civilization.Model.Classes.Pair<Integer, Integer> to) {
+        sut.civilization.Model.Classes.Pair<Integer, Integer> old = unit.getLocation();
+        if (sut.civilization.Model.Classes.Pair.isValid(old)
+                && sut.civilization.Model.Classes.Game.instance.map[old.x][old.y].getCivilizedUnit() == unit)
+            sut.civilization.Model.Classes.Game.instance.map[old.x][old.y].setCivilizedUnit(null);
+        unit.getLocation().x = to.x;
+        unit.getLocation().y = to.y;
+        sut.civilization.Model.Classes.Game.instance.map[to.x][to.y].setCivilizedUnit(unit);
+    }
+
     /** Plants a fresh unit of the given type on the server's authoritative game (test rig:
      *  the spawns are far apart, walking a sword across the map would take dozens of turns). */
     static sut.civilization.Model.Classes.CivilizedUnit plantUnit(
@@ -869,6 +881,59 @@ public class Phase3Driver {
             alice.send(new ResearchRequest("Stone Mine Technology"));
             denied = (ActionResultResponse) alice.expect(ActionResultResponse.TYPE);
             check("research: routed to the server and refused while the queue is busy", !denied.isOk());
+
+            // ── build + station over the wire (rig: put the builder on a bare
+            // territory meadow, the server does the rest with full validation) ──
+            sut.civilization.Model.Classes.CivilizedUnit aliceBuilder = null, aliceWorker = null;
+            for (sut.civilization.Model.Classes.Unit u : aliceUser.getNation().getUnits()) {
+                if (!(u instanceof sut.civilization.Model.Classes.CivilizedUnit)) continue;
+                sut.civilization.Model.Classes.CivilizedUnit cu = (sut.civilization.Model.Classes.CivilizedUnit) u;
+                if (cu.getCivilizedUnitType() == sut.civilization.Model.ModulEnums.CivilizedUnitType.BUILDER
+                        && aliceBuilder == null) aliceBuilder = cu;
+                if (cu.getCivilizedUnitType() == sut.civilization.Model.ModulEnums.CivilizedUnitType.WORKER
+                        && aliceWorker == null) aliceWorker = cu;
+            }
+            sut.civilization.Model.Classes.Land thLand = aliceUser.getNation().getTownHall().getMainLand();
+            sut.civilization.Model.Classes.Pair<Integer, Integer> farmHex = null;
+            for (sut.civilization.Model.Classes.Pair<Integer, Integer> h : aliceUser.getNation().getTerritory()) {
+                if (!sut.civilization.Model.Classes.Pair.isValid(h)) continue;
+                if (h.x == thLand.getI() && h.y == thLand.getJ()) continue;
+                if (game.map[h.x][h.y].getCivilizedUnit() != null) continue;
+                farmHex = h;
+                break;
+            }
+            sut.civilization.Model.Classes.Land farmTile = game.map[farmHex.x][farmHex.y];
+            farmTile.setLandType(sut.civilization.Model.ModulEnums.LandType.MEADOW);
+            farmTile.setLandFeature(null);
+            farmTile.setImprovement(null);
+            relocate(aliceBuilder, farmHex);
+
+            alice.send(new BuildImprovementRequest(farmHex.x, farmHex.y, "Farm"));
+            ok = (ActionResultResponse) alice.expect(ActionResultResponse.TYPE);
+            check("build: the server builds a Farm on request", ok.isOk() && farmTile.getImprovement() != null);
+            alice.expect(GameStateBroadcast.TYPE);
+            bob.expect(GameStateBroadcast.TYPE);
+
+            // move the builder off, put the worker on the farm, station it
+            for (sut.civilization.Model.Classes.Pair<Integer, Integer> h : aliceUser.getNation().getTerritory()) {
+                if (!sut.civilization.Model.Classes.Pair.isValid(h) || h.equals(farmHex)) continue;
+                if (h.x == thLand.getI() && h.y == thLand.getJ()) continue;
+                if (game.map[h.x][h.y].getCivilizedUnit() != null) continue;
+                relocate(aliceBuilder, h);
+                break;
+            }
+            relocate(aliceWorker, farmHex);
+            alice.send(new StationRequest(farmHex.x, farmHex.y, true));
+            ok = (ActionResultResponse) alice.expect(ActionResultResponse.TYPE);
+            check("station: the server stations the worker into the farm",
+                    ok.isOk() && aliceWorker.isStationed());
+            alice.expect(GameStateBroadcast.TYPE);
+            bob.expect(GameStateBroadcast.TYPE);
+            alice.send(new StationRequest(farmHex.x, farmHex.y, false));
+            ok = (ActionResultResponse) alice.expect(ActionResultResponse.TYPE);
+            check("station: and pulls it back out again", ok.isOk() && !aliceWorker.isStationed());
+            alice.expect(GameStateBroadcast.TYPE);
+            bob.expect(GameStateBroadcast.TYPE);
 
             // ── flat structure damage over the wire (P3-33) ──
             int thMax = bobUser.getNation().getTownHall().getMaxHp();

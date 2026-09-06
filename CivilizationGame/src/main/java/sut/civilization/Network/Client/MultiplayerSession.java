@@ -142,6 +142,14 @@ public class MultiplayerSession implements NetworkManager.Listener {
         network.send(new sut.civilization.Network.Messages.ResearchRequest(techName));
     }
 
+    public void sendBuildImprovement(Pair<Integer, Integer> at, String improvementName) {
+        network.send(new sut.civilization.Network.Messages.BuildImprovementRequest(at.x, at.y, improvementName));
+    }
+
+    public void sendStation(Pair<Integer, Integer> at, boolean station) {
+        network.send(new sut.civilization.Network.Messages.StationRequest(at.x, at.y, station));
+    }
+
     // ── server pushes (NetworkManager already put us on the EDT) ─────────────
 
     @Override
@@ -194,14 +202,15 @@ public class MultiplayerSession implements NetworkManager.Listener {
 
         currentPlayer = broadcast.getCurrentPlayer();
 
-        // same steps as SaveController.loadGame: swap the instance, rebuild caches,
-        // repoint the per-session statics, then rebuild the screen
+        // same steps as SaveController.loadGame EXCEPT the distance matrix: all
+        // multiplayer pathfinding runs on the SERVER, the client never reads it -
+        // and recomputing 225x225 all-pairs paths here froze the UI thread for
+        // seconds on EVERY broadcast (open dialogs stopped painting and looked
+        // blank). The arrays stay allocated so a stray read sees zeros, not null
         loaded.adoptWindowFrom(Game.instance);
         Game.instance = loaded;
         loaded.dist = new int[225][225];
         loaded.path = new String[225][225];
-        LandController.initializeDistances();
-        LandController.updateDistances();
 
         User me = null;
         for (User user : loaded.getPlayersInGame())

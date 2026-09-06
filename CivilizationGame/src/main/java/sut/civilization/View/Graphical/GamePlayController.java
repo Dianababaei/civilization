@@ -1039,10 +1039,16 @@ public class GamePlayController extends ViewController {
         return new ImageIcon(icon.getImage().getScaledInstance(w, h, Image.SCALE_SMOOTH));
     }
 
+    /** The unit actions that are wired through the server in multiplayer. */
+    private static boolean multiplayerAction(UnitActions action) {
+        return action == UnitActions.MOVE || action == UnitActions.ATTACK
+                || action == UnitActions.BUILD_IMPROVEMENT || action == UnitActions.REPAIR;
+    }
+
     private void handleCommonActions(UnitActions action, Unit unit, JLabel unitMovement, int selection, JButton actionButton) {
-        // phase 3: MOVE and ATTACK go through the server; the rest is disabled
+        // phase 3: these actions go through the server; the rest is disabled
         // with the reason on the tooltip (never a dead mystery button)
-        if (MultiplayerSession.isActive() && action != UnitActions.MOVE && action != UnitActions.ATTACK) {
+        if (MultiplayerSession.isActive() && !multiplayerAction(action)) {
             actionButton.setEnabled(false);
             actionButton.setToolTipText("Not available in multiplayer yet.");
             return;
@@ -1074,11 +1080,12 @@ public class GamePlayController extends ViewController {
     private JScrollPane openImprovementsScrollPane;
 
     private void handleCivilizedUnitActions(UnitActions action, CivilizedUnit unit, JButton actionButton, JPanel actionsAndImprovementsHBox) {
-        // phase 3: most of these don't run locally in multiplayer yet. MOVE must be
+        // phase 3: most of these don't run locally in multiplayer. MOVE must be
         // left alone here - every button passes through BOTH handlers, and MOVE
         // belongs to handleCommonActions (which already enabled it for multiplayer).
-        // ATTACK falls through to its case below, which has its own MP branch
-        if (MultiplayerSession.isActive() && action != UnitActions.MOVE && action != UnitActions.ATTACK) {
+        // ATTACK / BUILD_IMPROVEMENT / REPAIR fall through to their cases below,
+        // which each have their own multiplayer branch
+        if (MultiplayerSession.isActive() && !multiplayerAction(action)) {
             actionButton.setEnabled(false);
             actionButton.setToolTipText("Not available in multiplayer yet.");
             return;
@@ -1098,6 +1105,22 @@ public class GamePlayController extends ViewController {
                 }
                 break;
             case BUILD_IMPROVEMENT:
+                // phase 3: in multiplayer the build is a REQUEST - pick a type,
+                // the server validates terrain/tech/resources/AP/charges itself
+                if (MultiplayerSession.isActive()) {
+                    actionButton.addActionListener(e -> {
+                        ImprovementType[] types = ImprovementType.values();
+                        String[] options = new String[types.length];
+                        for (int i = 0; i < types.length; i++)
+                            options[i] = types[i].name + "  (" + types[i].buildCostWood + "w/"
+                                    + types[i].buildCostStone + "s/" + types[i].buildCostIron + "i)";
+                        int pick = JOptionPane.showOptionDialog(root, "Build what on this hex?", "Build",
+                                JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[0]);
+                        if (pick < 0) return;
+                        MultiplayerSession.get().sendBuildImprovement(unit.getLocation(), types[pick].name);
+                    });
+                    break;
+                }
                 actionButton.addActionListener(e -> {
                     if (openImprovementsScrollPane != null) {
                         actionsAndImprovementsHBox.remove(openImprovementsScrollPane);
@@ -1110,6 +1133,14 @@ public class GamePlayController extends ViewController {
                 });
                 break;
             case REPAIR:
+                // phase 3: station/unstation is a server request in multiplayer
+                if (MultiplayerSession.isActive()) {
+                    boolean stationed = unit.isStationed();
+                    actionButton.setText(stationed ? "Unstation" : "Station");
+                    actionButton.addActionListener(e ->
+                            MultiplayerSession.get().sendStation(unit.getLocation(), !stationed));
+                    break;
+                }
                 if (unit.isStationed()) {
                     // Unstationing always succeeds once a Worker is confirmed stationed.
                     actionButton.setEnabled(true);

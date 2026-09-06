@@ -120,6 +120,10 @@ public class GameSession {
                 result = handleUpgradeTownHall(handler);
             } else if (message instanceof sut.civilization.Network.Messages.ResearchRequest) {
                 result = handleResearch(handler, (sut.civilization.Network.Messages.ResearchRequest) message);
+            } else if (message instanceof sut.civilization.Network.Messages.BuildImprovementRequest) {
+                result = handleBuildImprovement(handler, (sut.civilization.Network.Messages.BuildImprovementRequest) message);
+            } else if (message instanceof sut.civilization.Network.Messages.StationRequest) {
+                result = handleStation(handler, (sut.civilization.Network.Messages.StationRequest) message);
             } else if (message instanceof TradeOfferRequest) {
                 result = handleTradeOffer(handler, (TradeOfferRequest) message);
             } else if (message instanceof TradeReplyRequest) {
@@ -356,6 +360,64 @@ public class GameSession {
         String message = sut.civilization.Controller.GameControllers.TownHallController
                 .enqueueUnit(request.getUnitName());
         boolean ok = townHall != null && townHall.getProductionQueue().size() > queuedBefore;
+        return new ActionResultResponse(ok, message);
+    }
+
+    /** The unit on (x,y) if it belongs to the requester, else null (sets `problem[0]`). */
+    private CivilizedUnit ownUnitAt(ClientHandler handler, int x, int y, String[] problem) {
+        if (!inBounds(x, y)) {
+            problem[0] = "That hex is not on the map.";
+            return null;
+        }
+        CivilizedUnit unit = Game.instance.map[x][y].getCivilizedUnit();
+        if (unit == null) {
+            problem[0] = "There is no unit on that hex.";
+            return null;
+        }
+        if (unit.getOwnerNation() != userOf(handler).getNation()) {
+            problem[0] = "That unit is not yours.";
+            return null;
+        }
+        return unit;
+    }
+
+    /** Builder constructs on its own tile - full phase 1/2 validation reused. */
+    private ActionResultResponse handleBuildImprovement(ClientHandler handler,
+                                                        sut.civilization.Network.Messages.BuildImprovementRequest request) {
+        String turnProblem = checkTurn(handler);
+        if (turnProblem != null) return new ActionResultResponse(false, turnProblem);
+        String[] problem = new String[1];
+        CivilizedUnit builder = ownUnitAt(handler, request.getX(), request.getY(), problem);
+        if (builder == null) return new ActionResultResponse(false, problem[0]);
+
+        GameController.setCurrentTurnUser(userOf(handler));
+        GameController.setSelectedCivilizedUnit(builder);
+        Land tile = Game.instance.map[request.getX()][request.getY()];
+        sut.civilization.Model.Classes.Improvement before = tile.getImprovement();
+        String message = sut.civilization.Controller.GameControllers.WorkerController
+                .builderBuildImprovement(request.getImprovementName());
+        GameController.setSelectedCivilizedUnit(null);
+        boolean ok = tile.getImprovement() != null && tile.getImprovement() != before;
+        if (ok) LandController.updateLandVisibility();
+        return new ActionResultResponse(ok, message);
+    }
+
+    /** Worker stations into (or leaves) the improvement on its tile. */
+    private ActionResultResponse handleStation(ClientHandler handler,
+                                               sut.civilization.Network.Messages.StationRequest request) {
+        String turnProblem = checkTurn(handler);
+        if (turnProblem != null) return new ActionResultResponse(false, turnProblem);
+        String[] problem = new String[1];
+        CivilizedUnit worker = ownUnitAt(handler, request.getX(), request.getY(), problem);
+        if (worker == null) return new ActionResultResponse(false, problem[0]);
+
+        GameController.setCurrentTurnUser(userOf(handler));
+        GameController.setSelectedCivilizedUnit(worker);
+        String message = request.isStation()
+                ? sut.civilization.Controller.GameControllers.WorkerController.stationWorker()
+                : sut.civilization.Controller.GameControllers.WorkerController.unstationWorker();
+        GameController.setSelectedCivilizedUnit(null);
+        boolean ok = worker.isStationed() == request.isStation();
         return new ActionResultResponse(ok, message);
     }
 
