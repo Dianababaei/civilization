@@ -90,7 +90,13 @@ public class MultiplayerSession implements NetworkManager.Listener {
     }
 
     public void sendChat(String text) {
-        network.send(new ChatSendRequest(text));
+        // P3-48: a leading "/" is a CHEAT command - it goes to the server as a
+        // cheat request (never executed locally); everything else is chat
+        if (text != null && text.startsWith("/")) {
+            network.send(new sut.civilization.Network.Messages.CheatCommandRequest(text));
+        } else {
+            network.send(new ChatSendRequest(text));
+        }
     }
 
     public String getMyName() {

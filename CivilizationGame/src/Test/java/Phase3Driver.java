@@ -83,6 +83,11 @@ public class Phase3Driver {
         sut.civilization.Controller.GameControllers.SaveController.saveDirectory =
                 System.getProperty("java.io.tmpdir") + java.io.File.separator + "civ-phase3-driver-saves";
 
+        // accounts persist on disk between server runs (that is the feature) -
+        // start every driver run from an empty account book so the sign-up
+        // checks and the test usernames never collide with a previous run
+        sut.civilization.Network.Server.Lobby.ACCOUNTS_FILE.delete();
+
         // System.exit in the finally block: if a test dies mid-way, the server's
         // accept/handler threads must not keep a zombie JVM (and its port) alive,
         // poisoning every later run
@@ -165,6 +170,39 @@ public class Phase3Driver {
             JoinResultResponse r = (JoinResultResponse) empty.expect(JoinResultResponse.TYPE);
             check("lobby: empty username rejected", !r.isOk());
         }
+
+        // ── accounts survive on disk (bonus P3-51): sign up once, then login ──
+        try (TestClient eve = new TestClient()) {
+            eve.send(new JoinLobbyRequest("eve", "secret123", "signup"));
+            JoinResultResponse r = (JoinResultResponse) eve.expect(JoinResultResponse.TYPE);
+            check("accounts: sign up with a new name works", r.isOk());
+        } // eve disconnects, but her account stays registered
+        try (TestClient copycat = new TestClient()) {
+            copycat.send(new JoinLobbyRequest("eve", "whatever", "signup"));
+            JoinResultResponse r = (JoinResultResponse) copycat.expect(JoinResultResponse.TYPE);
+            check("accounts: sign up with a registered name is refused",
+                    !r.isOk() && r.getReason().contains("Login"));
+        }
+        try (TestClient wrongPass = new TestClient()) {
+            wrongPass.send(new JoinLobbyRequest("eve", "not-her-password", "login"));
+            JoinResultResponse r = (JoinResultResponse) wrongPass.expect(JoinResultResponse.TYPE);
+            check("accounts: login with a wrong password is refused",
+                    !r.isOk() && r.getReason().contains("Wrong password"));
+        }
+        try (TestClient stranger = new TestClient()) {
+            stranger.send(new JoinLobbyRequest("nobody", "pw", "login"));
+            JoinResultResponse r = (JoinResultResponse) stranger.expect(JoinResultResponse.TYPE);
+            check("accounts: login with an unknown name is refused",
+                    !r.isOk() && r.getReason().contains("Sign up"));
+        }
+        try (TestClient eveBack = new TestClient()) {
+            eveBack.send(new JoinLobbyRequest("eve", "secret123", "login"));
+            JoinResultResponse r = (JoinResultResponse) eveBack.expect(JoinResultResponse.TYPE);
+            check("accounts: login with the right password works", r.isOk());
+        }
+        // eve entered and left the lobby twice - drain those four state pushes
+        // from alice's stream so the later expectations see fresh ones
+        for (int i = 0; i < 4; i++) alice.expect(LobbyStateBroadcast.TYPE);
 
         TestClient bob = new TestClient();
         bob.send(new JoinLobbyRequest("bob"));
@@ -881,6 +919,26 @@ public class Phase3Driver {
             alice.send(new ResearchRequest("Stone Mine Technology"));
             denied = (ActionResultResponse) alice.expect(ActionResultResponse.TYPE);
             check("research: routed to the server and refused while the queue is busy", !denied.isOk());
+
+            // ── chat-box cheat commands (bonus P3-48): "/x" is a server request ──
+            bob.send(new CheatCommandRequest("/greedisgood"));
+            denied = (ActionResultResponse) bob.expect(ActionResultResponse.TYPE);
+            check("cheat: non-host /commands are rejected", !denied.isOk() && denied.getText().contains("host"));
+
+            alice.send(new CheatCommandRequest("/nosuchcheat"));
+            denied = (ActionResultResponse) alice.expect(ActionResultResponse.TYPE);
+            check("cheat: unknown command points at /help", !denied.isOk() && denied.getText().contains("/help"));
+
+            alice.send(new CheatCommandRequest("/marco"));
+            ok = (ActionResultResponse) alice.expect(ActionResultResponse.TYPE);
+            check("cheat: /marco accepted for the host", ok.isOk());
+            GameStateBroadcast afterMarco = (GameStateBroadcast) alice.expect(GameStateBroadcast.TYPE);
+            boolean cheatAnnounced = false;
+            for (String n : afterMarco.getNotifications()) if (n.contains("CHEAT")) cheatAnnounced = true;
+            check("cheat: /marco is announced to everyone", cheatAnnounced);
+            check("cheat: /marco lifts the fog - bob's far corner is now explored in alice's packet",
+                    decodeState(afterMarco).map[11][11].getVisibility() >= 1);
+            bob.expect(GameStateBroadcast.TYPE);
 
             // ── build + station over the wire (rig: put the builder on a bare
             // territory meadow, the server does the rest with full validation) ──

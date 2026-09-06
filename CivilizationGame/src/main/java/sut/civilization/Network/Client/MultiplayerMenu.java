@@ -14,28 +14,58 @@ import java.io.IOException;
 public class MultiplayerMenu {
 
     public static void open(Component parent) {
-        String[] options = {"Host Game", "Join Game", "Cancel"};
-        int choice = JOptionPane.showOptionDialog(parent,
-                "Host a new game on this computer, or join a friend's game?",
-                "Multiplayer", JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE,
-                null, options, options[0]);
-        if (choice != 0 && choice != 1) return;
-
-        String username = JOptionPane.showInputDialog(parent, "Choose a username:", "Player");
-        if (username == null || username.trim().isEmpty()) return;
-        username = username.trim();
-
-        // P3-51: a new username registers this password on the server; joining
-        // again with the same name requires the same password
+        // one form instead of a chain of popups: who you are (login / sign up)
+        // and where you play (host / join) are the only two decisions here
+        javax.swing.JTextField usernameField = new javax.swing.JTextField();
         javax.swing.JPasswordField passwordField = new javax.swing.JPasswordField();
-        int answer = JOptionPane.showConfirmDialog(parent, passwordField,
-                "Password (new username = registers it):", JOptionPane.OK_CANCEL_OPTION);
+        javax.swing.JRadioButton loginChoice = new javax.swing.JRadioButton("Login (existing account)", true);
+        javax.swing.JRadioButton signUpChoice = new javax.swing.JRadioButton("Sign up (new account)");
+        javax.swing.ButtonGroup accountGroup = new javax.swing.ButtonGroup();
+        accountGroup.add(loginChoice);
+        accountGroup.add(signUpChoice);
+
+        javax.swing.JRadioButton hostChoice = new javax.swing.JRadioButton("Host a new game on this computer", true);
+        javax.swing.JRadioButton joinChoice = new javax.swing.JRadioButton("Join a friend's game at address:");
+        javax.swing.ButtonGroup connectionGroup = new javax.swing.ButtonGroup();
+        connectionGroup.add(hostChoice);
+        connectionGroup.add(joinChoice);
+        javax.swing.JTextField addressField =
+                new javax.swing.JTextField("127.0.0.1:" + GameServer.DEFAULT_PORT);
+        addressField.setEnabled(false);
+        hostChoice.addActionListener(e -> addressField.setEnabled(false));
+        joinChoice.addActionListener(e -> addressField.setEnabled(true));
+
+        javax.swing.JPanel form = new javax.swing.JPanel();
+        form.setLayout(new javax.swing.BoxLayout(form, javax.swing.BoxLayout.Y_AXIS));
+        form.add(new javax.swing.JLabel("Account"));
+        form.add(new javax.swing.JLabel("Username:"));
+        form.add(usernameField);
+        form.add(new javax.swing.JLabel("Password:"));
+        form.add(passwordField);
+        form.add(loginChoice);
+        form.add(signUpChoice);
+        form.add(javax.swing.Box.createVerticalStrut(12));
+        form.add(new javax.swing.JLabel("Game"));
+        form.add(hostChoice);
+        form.add(joinChoice);
+        form.add(addressField);
+
+        int answer = JOptionPane.showConfirmDialog(parent, form, "Multiplayer",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
         if (answer != JOptionPane.OK_OPTION) return;
+
+        String username = usernameField.getText().trim();
+        if (username.isEmpty()) {
+            JOptionPane.showMessageDialog(parent, "Username can not be empty.",
+                    "Multiplayer", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
         String password = new String(passwordField.getPassword());
+        String mode = signUpChoice.isSelected() ? "signup" : "login";
 
         String host;
         int port;
-        if (choice == 0) {
+        if (hostChoice.isSelected()) {
             host = "127.0.0.1";
             // a leftover server from an earlier match may still hold the default
             // port - its lobby is stale ("game already started"), so instead of
@@ -57,8 +87,7 @@ public class MultiplayerMenu {
                         "Different port", JOptionPane.INFORMATION_MESSAGE);
             }
         } else {
-            String address = JOptionPane.showInputDialog(parent,
-                    "Server address (ip:port):", "127.0.0.1:" + GameServer.DEFAULT_PORT);
+            String address = addressField.getText();
             if (address == null || address.trim().isEmpty()) return;
             String[] parts = address.trim().split(":");
             host = parts[0];
@@ -96,7 +125,7 @@ public class MultiplayerMenu {
 
         LobbyWindow lobby = new LobbyWindow(network, username, host + ":" + port);
         lobby.setVisible(true);
-        network.send(new JoinLobbyRequest(username, password));
+        network.send(new JoinLobbyRequest(username, password, mode));
     }
 
     /** First port from `preferred` upward that nothing is listening on. */

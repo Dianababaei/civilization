@@ -31,11 +31,48 @@ public class Lobby {
     private GameSession session = null;
 
     // ── P3-51 bonus: password accounts + JWT ─────────────────────────────────
-    // first login with a username registers its password; later logins must
-    // match. A successful login gets a signed token that every later request
+    // Sign up registers a username+password, login must match it. Accounts are
+    // kept in a file (as SHA-256 hashes, never plain text) so they survive
+    // server restarts - every "Host Game" spawns a fresh server process, and
+    // without the file it would forget every password ever registered.
+    // A successful login gets a signed token that every later request
     // must carry (ClientHandler checks it via checkToken)
+    public static final java.io.File ACCOUNTS_FILE = new java.io.File("mp_accounts.txt");
     private final java.util.Map<String, String> accounts = new java.util.HashMap<>();
     private final TokenService tokenService = new TokenService();
+
+    public Lobby() {
+        if (!ACCOUNTS_FILE.exists()) return;
+        try (java.util.Scanner in = new java.util.Scanner(ACCOUNTS_FILE, "UTF-8")) {
+            while (in.hasNextLine()) {
+                String[] parts = in.nextLine().split(" ", 2);
+                if (parts.length == 2) accounts.put(parts[0], parts[1]);
+            }
+        } catch (Exception e) {
+            System.out.println("Could not read " + ACCOUNTS_FILE + ": " + e);
+        }
+    }
+
+    private void saveAccounts() {
+        try (java.io.PrintWriter out = new java.io.PrintWriter(ACCOUNTS_FILE, "UTF-8")) {
+            for (java.util.Map.Entry<String, String> entry : accounts.entrySet())
+                out.println(entry.getKey() + " " + entry.getValue());
+        } catch (Exception e) {
+            System.out.println("Could not write " + ACCOUNTS_FILE + ": " + e);
+        }
+    }
+
+    private static String hash(String password) {
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(password.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder();
+            for (byte b : digest) hex.append(String.format("%02x", b));
+            return hex.toString();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new RuntimeException(e); // SHA-256 always exists on a JVM
+        }
+    }
 
     /** Null when the token authenticates this username, otherwise the complaint. */
     public String checkToken(String token, String username) {
@@ -46,10 +83,10 @@ public class Lobby {
      * Answers the handler itself (accept or reject) so the JoinResultResponse
      * always reaches the client BEFORE the first lobby broadcast.
      */
-    public synchronized void join(ClientHandler handler, String username, String password) {
+    public synchronized void join(ClientHandler handler, String username, String password, String mode) {
         String reason = null;
         String name = username == null ? "" : username.trim();
-        String pass = password == null ? "" : password;
+        String passHash = hash(password == null ? "" : password);
         if (started) reason = "The game has already started, you can not join anymore.";
         else if (name.isEmpty()) reason = "Username can not be empty.";
         else {
@@ -58,15 +95,24 @@ public class Lobby {
                     reason = "The username \"" + name + "\" is already taken.";
                     break;
                 }
-            String knownPassword = accounts.get(name.toLowerCase());
-            if (reason == null && knownPassword != null && !knownPassword.equals(pass))
-                reason = "Wrong password for \"" + name + "\".";
+            String knownHash = accounts.get(name.toLowerCase());
+            if (reason == null) {
+                if ("signup".equals(mode) && knownHash != null)
+                    reason = "\"" + name + "\" is already registered - choose Login instead.";
+                else if ("login".equals(mode) && knownHash == null)
+                    reason = "There is no account called \"" + name + "\" - choose Sign up first.";
+                else if (knownHash != null && !knownHash.equals(passHash))
+                    reason = "Wrong password for \"" + name + "\".";
+            }
         }
         if (reason != null) {
             handler.send(new JoinResultResponse(false, reason, null, false));
             return;
         }
-        accounts.putIfAbsent(name.toLowerCase(), pass);
+        if (!accounts.containsKey(name.toLowerCase())) {
+            accounts.put(name.toLowerCase(), passHash);
+            saveAccounts();
+        }
         handler.setUsername(name);
         players.add(handler);
         boolean host = isHost(handler);

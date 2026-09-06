@@ -74,7 +74,7 @@ public class ClientHandler extends Thread {
             // the lobby answers with a JoinResultResponse itself
             if (message instanceof JoinLobbyRequest) {
                 JoinLobbyRequest join = (JoinLobbyRequest) message;
-                lobby.join(this, join.getUsername(), join.getPassword());
+                lobby.join(this, join.getUsername(), join.getPassword(), join.getMode());
             } else {
                 send(new ErrorResponse("Join the lobby first."));
             }

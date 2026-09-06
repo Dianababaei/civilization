@@ -116,6 +116,9 @@ public class GameSession {
                 result = handleTrainUnit(handler, (TrainUnitRequest) message);
             } else if (message instanceof DebugActionRequest) {
                 result = handleDebugAction(handler, (DebugActionRequest) message, notifications);
+            } else if (message instanceof sut.civilization.Network.Messages.CheatCommandRequest) {
+                result = handleCheatCommand(handler,
+                        (sut.civilization.Network.Messages.CheatCommandRequest) message, notifications);
             } else if (message instanceof sut.civilization.Network.Messages.UpgradeTownHallRequest) {
                 result = handleUpgradeTownHall(handler);
             } else if (message instanceof sut.civilization.Network.Messages.ResearchRequest) {
@@ -533,6 +536,86 @@ public class GameSession {
                 return new ActionResultResponse(false, "Unknown demo action.");
         }
         notifications.add("DEMO CHEAT: " + user.getUsername() + " " + done + ".");
+        return new ActionResultResponse(true, "Done - " + done + " (announced to everyone).");
+    }
+
+    /**
+     * Chat-box cheat codes (bonus P3-48): typed as "/command", sent by the
+     * client as a request, applied HERE on the authoritative game, host-only,
+     * and always announced to every player - a cheat is never a secret.
+     */
+    private ActionResultResponse handleCheatCommand(ClientHandler handler,
+                                                    sut.civilization.Network.Messages.CheatCommandRequest request,
+                                                    List<String> notifications) {
+        if (players.isEmpty() || players.get(0) != handler)
+            return new ActionResultResponse(false, "Only the host can use cheat commands.");
+
+        User user = userOf(handler);
+        Nation nation = user.getNation();
+        String command = request.getText() == null ? "" : request.getText().trim().toLowerCase();
+        String done;
+        switch (command) {
+            case "/greedisgood":
+                nation.getFood().add(500);
+                nation.getWood().add(500);
+                nation.getStone().add(500);
+                nation.getIron().add(500);
+                done = "filled their storage with /greedisgood";
+                break;
+            case "/redbull":
+                for (Unit unit : nation.getUnits()) unit.refreshAp();
+                done = "refilled every unit's AP with /redbull";
+                break;
+            case "/marco":
+                // full fog removal for the CALLER only - their snapshots now treat
+                // every hex as explored (current vision circles stay honest)
+                for (int i = 0; i < Consts.MAP_SIZE.amount.x; i++)
+                    for (int j = 0; j < Consts.MAP_SIZE.amount.y; j++)
+                        Game.instance.map[i][j].addSeerNation(nation);
+                done = "removed their fog of war with /marco";
+                break;
+            case "/smite": {
+                User enemy = firstOpponentOf(user);
+                if (enemy == null || enemy.getNation().getTownHall() == null)
+                    return new ActionResultResponse(false, "No enemy Town Hall to smite.");
+                Land thLand = enemy.getNation().getTownHall().getMainLand();
+                // triggerEarthquake logs into turnNotifications for the SP flow -
+                // pull those back out, the summary rides this broadcast instead
+                int before = GameController.turnNotifications.size();
+                String summary = sut.civilization.Controller.GameControllers.DisasterController
+                        .triggerEarthquake(new Pair<>(thLand.getI(), thLand.getJ()));
+                while (GameController.turnNotifications.size() > before)
+                    GameController.turnNotifications.remove(GameController.turnNotifications.size() - 1);
+                notifications.add(summary);
+                done = "called an earthquake on " + enemy.getUsername() + "'s Town Hall with /smite";
+                break;
+            }
+            case "/cavalry": {
+                int converted = 0;
+                for (Unit unit : new ArrayList<>(nation.getUnits())) {
+                    if (!(unit instanceof CivilizedUnit)) continue;
+                    CivilizedUnit worker = (CivilizedUnit) unit;
+                    if (worker.getCivilizedUnitType() != CivilizedUnitType.WORKER || worker.isStationed()) continue;
+                    Pair<Integer, Integer> loc = worker.getLocation();
+                    if (!Pair.isValid(loc) || Game.instance.map[loc.x][loc.y].getCivilizedUnit() != worker) continue;
+                    nation.getUnits().remove(worker);
+                    CivilizedUnit cavalry = new CivilizedUnit(CivilizedUnitType.CAVALRY, nation,
+                            new Pair<>(loc.x, loc.y));
+                    Game.instance.map[loc.x][loc.y].setCivilizedUnit(cavalry);
+                    nation.getUnits().add(cavalry);
+                    converted++;
+                }
+                done = "turned " + converted + " worker(s) into Cavalry with /cavalry";
+                break;
+            }
+            case "/help":
+                return new ActionResultResponse(false,
+                        "Cheats (host only): /greedisgood /redbull /marco /smite /cavalry");
+            default:
+                return new ActionResultResponse(false,
+                        "Unknown cheat \"" + command + "\" - try /help");
+        }
+        notifications.add("CHEAT: " + user.getUsername() + " " + done + ".");
         return new ActionResultResponse(true, "Done - " + done + " (announced to everyone).");
     }
 

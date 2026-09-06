@@ -2293,7 +2293,8 @@ public class GamePlayController extends ViewController {
         panel.setBorder(BorderFactory.createEmptyBorder(10, 12, 10, 12));
 
         JLabel note = new JLabel("<html>Host-only, executed by the SERVER and announced to every player.<br>"
-                + "For demoing scenarios fast (war, elimination, trades).</html>");
+                + "For demoing scenarios fast (war, elimination, trades).<br>"
+                + "Also available as chat commands - type <b>/help</b> in Chat.</html>");
         note.setForeground(new Color(0x888888));
         panel.add(note);
         panel.add(Box.createVerticalStrut(8));
