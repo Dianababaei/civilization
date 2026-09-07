@@ -19,6 +19,11 @@ import java.net.Socket;
 public class GameServer {
     public static final int DEFAULT_PORT = 5555;
 
+    /** True only when running as our own process (main). The test driver
+     *  builds GameServer objects inside its own JVM, and an empty-lobby
+     *  System.exit there would kill the whole test run. */
+    public static boolean standalone = false;
+
     private final int port;
     private final Lobby lobby = new Lobby();
     private ServerSocket serverSocket;
@@ -93,8 +98,16 @@ public class GameServer {
     /** Standalone entry point: java ... GameServer [port] */
     public static void main(String[] args) throws IOException, InterruptedException {
         int port = args.length > 0 ? Integer.parseInt(args[0]) : DEFAULT_PORT;
+        standalone = true;
         GameServer server = new GameServer(port);
         server.start();
-        Thread.currentThread().join(); // keep the process alive
+        // stay alive only as long as the game that spawned us: our stdin is a
+        // pipe from the parent process, so EOF means the parent is gone (even
+        // if it was force-killed and its shutdown hook never ran). Without
+        // this, dead games left zombie servers squatting on ports and writing
+        // their stale in-memory account list back over mp_accounts.txt
+        while (System.in.read() != -1) { /* nothing is ever actually written */ }
+        System.out.println("Parent game is gone - shutting down.");
+        System.exit(0);
     }
 }

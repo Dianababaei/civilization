@@ -60,7 +60,9 @@ public class ClientHandler extends Thread {
         } catch (IOException ignored) {
             // connection dropped - handled by the cleanup below
         } finally {
-            if (username != null) lobby.leave(this);
+            // even a connection that never managed to join must report in -
+            // the lobby's empty-server check counts on hearing about it
+            lobby.leave(this);
             try {
                 socket.close();
             } catch (IOException ignored) {

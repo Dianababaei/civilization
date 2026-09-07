@@ -37,7 +37,9 @@ public class Lobby {
     // without the file it would forget every password ever registered.
     // A successful login gets a signed token that every later request
     // must carry (ClientHandler checks it via checkToken)
-    public static final java.io.File ACCOUNTS_FILE = new java.io.File("mp_accounts.txt");
+    // not final: the test driver points this at a temp file so its fake test
+    // users never end up registered in the real game's account book
+    public static java.io.File ACCOUNTS_FILE = new java.io.File("mp_accounts.txt");
     private final java.util.Map<String, String> accounts = new java.util.HashMap<>();
     private final TokenService tokenService = new TokenService();
 
@@ -124,19 +126,28 @@ public class Lobby {
 
     /** Called by the handler thread when its socket dies or closes. */
     public synchronized void leave(ClientHandler handler) {
-        if (!players.remove(handler)) return;
-        announce(handler.getUsername() + " has disconnected.");
-        if (session != null) {
-            // mid-game drop: the session skips them so the match never freezes.
-            // whatever goes wrong in there must never kill this handler thread
-            // (the server surviving client crashes is a hard requirement)
-            try {
-                session.playerLeft(handler);
-            } catch (Exception e) {
-                System.out.println("Trouble handling " + handler.getUsername() + "'s exit: " + e);
+        if (players.remove(handler)) {
+            announce(handler.getUsername() + " has disconnected.");
+            if (session != null) {
+                // mid-game drop: the session skips them so the match never freezes.
+                // whatever goes wrong in there must never kill this handler thread
+                // (the server surviving client crashes is a hard requirement)
+                try {
+                    session.playerLeft(handler);
+                } catch (Exception e) {
+                    System.out.println("Trouble handling " + handler.getUsername() + "'s exit: " + e);
+                }
+            } else {
+                broadcastState();
             }
-        } else {
-            broadcastState();
+        }
+        // a standalone server with nobody connected is useless: exit so the
+        // port frees up and the next Host Game gets 5555 again instead of an
+        // ever-climbing port list. Runs for rejected joins too (they never
+        // enter the players list) - a wrong password must not leave a server
+        if (GameServer.standalone && players.isEmpty()) {
+            System.out.println("Nobody is connected any more - shutting down.");
+            System.exit(0);
         }
     }
 

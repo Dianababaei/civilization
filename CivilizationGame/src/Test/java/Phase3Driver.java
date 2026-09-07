@@ -84,8 +84,11 @@ public class Phase3Driver {
                 System.getProperty("java.io.tmpdir") + java.io.File.separator + "civ-phase3-driver-saves";
 
         // accounts persist on disk between server runs (that is the feature) -
-        // start every driver run from an empty account book so the sign-up
-        // checks and the test usernames never collide with a previous run
+        // use a private temp account book so the driver's fake users (alice,
+        // bob, ...) are never registered in the real game's mp_accounts.txt,
+        // and wipe it so sign-up checks never collide with a previous run
+        sut.civilization.Network.Server.Lobby.ACCOUNTS_FILE = new java.io.File(
+                System.getProperty("java.io.tmpdir"), "civ-phase3-driver-accounts.txt");
         sut.civilization.Network.Server.Lobby.ACCOUNTS_FILE.delete();
 
         // System.exit in the finally block: if a test dies mid-way, the server's
@@ -177,6 +180,9 @@ public class Phase3Driver {
             JoinResultResponse r = (JoinResultResponse) eve.expect(JoinResultResponse.TYPE);
             check("accounts: sign up with a new name works", r.isOk());
         } // eve disconnects, but her account stays registered
+        // the server notices a closed socket a moment later - if we reconnect too
+        // fast it still sees "eve" online and refuses with "taken" instead of "Login"
+        Thread.sleep(300);
         try (TestClient copycat = new TestClient()) {
             copycat.send(new JoinLobbyRequest("eve", "whatever", "signup"));
             JoinResultResponse r = (JoinResultResponse) copycat.expect(JoinResultResponse.TYPE);
@@ -842,6 +848,30 @@ public class Phase3Driver {
                     findUser(gameAtWar, "bob").getNation().getUnits().isEmpty());
             bob.expect(GameStateBroadcast.TYPE);
 
+            // ── peace: between enemies the same offer flow means PEACE (accept -> Neutral) ──
+            bob.send(new OfferAllianceRequest("alice"));
+            ok = (ActionResultResponse) bob.expect(ActionResultResponse.TYPE);
+            check("peace: an offer between enemies becomes a peace offer", ok.isOk() && ok.getText().contains("Peace"));
+            bob.expect(GameStateBroadcast.TYPE);
+            alice.expect(GameStateBroadcast.TYPE);
+            alice.send(new AllianceReplyRequest("bob", true));
+            ok = (ActionResultResponse) alice.expect(ActionResultResponse.TYPE);
+            check("peace: accepting it ends the war", ok.isOk() && ok.getText().contains("peace"));
+            GameStateBroadcast peaceState = (GameStateBroadcast) alice.expect(GameStateBroadcast.TYPE);
+            boolean peaceAnnounced = false;
+            for (String n : peaceState.getNotifications()) if (n.contains("made PEACE")) peaceAnnounced = true;
+            check("peace: the end of the war is global news", peaceAnnounced);
+            check("peace: snapshot says Neutral again", decodeState(peaceState)
+                    .relationBetween("alice", "bob") == sut.civilization.Model.ModulEnums.Relation.NEUTRAL);
+            bob.expect(GameStateBroadcast.TYPE);
+
+            // back to war for the battle tests below
+            alice.send(new DeclareWarRequest("bob"));
+            ok = (ActionResultResponse) alice.expect(ActionResultResponse.TYPE);
+            check("peace: war can be declared again afterwards", ok.isOk());
+            alice.expect(GameStateBroadcast.TYPE);
+            bob.expect(GameStateBroadcast.TYPE);
+
             // ── unit vs unit dice battle (P3-32): 1 die each, server rolls ──
             alice.send(new AttackRequest(sword1Hex.x, sword1Hex.y, bobWorker.getLocation().x, bobWorker.getLocation().y));
             ok = (ActionResultResponse) alice.expect(ActionResultResponse.TYPE);
@@ -939,6 +969,19 @@ public class Phase3Driver {
             check("cheat: /marco lifts the fog - bob's far corner is now explored in alice's packet",
                     decodeState(afterMarco).map[11][11].getVisibility() >= 1);
             bob.expect(GameStateBroadcast.TYPE);
+
+            // a second word aims the cheat at another player ("/greedisgood bob")
+            alice.send(new CheatCommandRequest("/greedisgood bob"));
+            ok = (ActionResultResponse) alice.expect(ActionResultResponse.TYPE);
+            check("cheat: host can aim a cheat at another player",
+                    ok.isOk() && ok.getText().contains("bob's storage"));
+            alice.expect(GameStateBroadcast.TYPE);
+            GameStateBroadcast bobRich = (GameStateBroadcast) bob.expect(GameStateBroadcast.TYPE);
+            check("cheat: the target's own packet shows the boosted storage",
+                    findUser(decodeState(bobRich), "bob").getNation().getWood().getBalance() >= 150);
+            alice.send(new CheatCommandRequest("/redbull nobody"));
+            denied = (ActionResultResponse) alice.expect(ActionResultResponse.TYPE);
+            check("cheat: aiming at an unknown player is refused", !denied.isOk());
 
             // ── build + station over the wire (rig: put the builder on a bare
             // territory meadow, the server does the rest with full validation) ──

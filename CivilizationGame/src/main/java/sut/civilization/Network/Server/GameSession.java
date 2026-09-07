@@ -551,8 +551,21 @@ public class GameSession {
             return new ActionResultResponse(false, "Only the host can use cheat commands.");
 
         User user = userOf(handler);
-        Nation nation = user.getNation();
-        String command = request.getText() == null ? "" : request.getText().trim().toLowerCase();
+        String[] words = (request.getText() == null ? "" : request.getText().trim().toLowerCase()).split("\\s+");
+        String command = words[0];
+        // an optional second word aims the cheat at another player, e.g.
+        // "/greedisgood Bob" fills BOB's storage (default: the caller's own)
+        User target = user;
+        if (words.length > 1) {
+            target = null;
+            for (User p : Game.instance.getPlayersInGame())
+                if (p.getUsername().equalsIgnoreCase(words[1])) target = p;
+            if (target == null)
+                return new ActionResultResponse(false, "There is no player called \"" + words[1] + "\".");
+        }
+        Nation nation = target.getNation();
+        // "their storage" when aimed at yourself, "Bob's storage" otherwise
+        String whose = target == user ? "their" : target.getUsername() + "'s";
         String done;
         switch (command) {
             case "/greedisgood":
@@ -560,22 +573,23 @@ public class GameSession {
                 nation.getWood().add(500);
                 nation.getStone().add(500);
                 nation.getIron().add(500);
-                done = "filled their storage with /greedisgood";
+                done = "filled " + whose + " storage with /greedisgood";
                 break;
             case "/redbull":
                 for (Unit unit : nation.getUnits()) unit.refreshAp();
-                done = "refilled every unit's AP with /redbull";
+                done = "refilled " + whose + " units' AP with /redbull";
                 break;
             case "/marco":
-                // full fog removal for the CALLER only - their snapshots now treat
-                // every hex as explored (current vision circles stay honest)
+                // full fog removal for the target nation only - their snapshots
+                // now treat every hex as explored (vision circles stay honest)
                 for (int i = 0; i < Consts.MAP_SIZE.amount.x; i++)
                     for (int j = 0; j < Consts.MAP_SIZE.amount.y; j++)
                         Game.instance.map[i][j].addSeerNation(nation);
-                done = "removed their fog of war with /marco";
+                done = "removed " + whose + " fog of war with /marco";
                 break;
             case "/smite": {
-                User enemy = firstOpponentOf(user);
+                // no name given -> the first opponent's Town Hall
+                User enemy = target != user ? target : firstOpponentOf(user);
                 if (enemy == null || enemy.getNation().getTownHall() == null)
                     return new ActionResultResponse(false, "No enemy Town Hall to smite.");
                 Land thLand = enemy.getNation().getTownHall().getMainLand();
@@ -605,12 +619,13 @@ public class GameSession {
                     nation.getUnits().add(cavalry);
                     converted++;
                 }
-                done = "turned " + converted + " worker(s) into Cavalry with /cavalry";
+                done = "turned " + converted + " of " + whose + " worker(s) into Cavalry with /cavalry";
                 break;
             }
             case "/help":
                 return new ActionResultResponse(false,
-                        "Cheats (host only): /greedisgood /redbull /marco /smite /cavalry");
+                        "Cheats (host only): /greedisgood /redbull /marco /smite /cavalry."
+                                + " Add a name to aim one at a player, e.g. /greedisgood Bob");
             default:
                 return new ActionResultResponse(false,
                         "Unknown cheat \"" + command + "\" - try /help");
@@ -662,15 +677,17 @@ public class GameSession {
         String me = handler.getUsername(), them = other.getUsername();
         if (Game.instance.relationBetween(me, them) == Relation.ALLY)
             return new ActionResultResponse(false, "You are already allied with " + them + ".");
-        if (Game.instance.relationBetween(me, them) == Relation.ENEMY)
-            return new ActionResultResponse(false, "You are at war with " + them + " - no alliances with enemies.");
+        // between enemies the same offer means PEACE (accept -> back to Neutral),
+        // otherwise it is an alliance offer (accept -> Ally) - one flow, two words
+        boolean atWar = Game.instance.relationBetween(me, them) == Relation.ENEMY;
+        String word = atWar ? "PEACE" : "an ALLIANCE";
 
         Game.instance.getAllianceOffers().put(me, them);
         // tell the target directly - they answer from their Diplomacy panel
         for (ClientHandler h : players)
             if (h.getUsername().equals(them))
-                h.send(new ErrorResponse(me + " offers you an ALLIANCE - open Diplomacy to answer."));
-        return new ActionResultResponse(true, "Alliance offer sent to " + them + ".");
+                h.send(new ErrorResponse(me + " offers you " + word + " - open Diplomacy to answer."));
+        return new ActionResultResponse(true, (atWar ? "Peace" : "Alliance") + " offer sent to " + them + ".");
     }
 
     private ActionResultResponse handleAllianceReply(ClientHandler handler, AllianceReplyRequest reply, List<String> notifications) {
@@ -680,11 +697,20 @@ public class GameSession {
             return new ActionResultResponse(false, "There is no alliance offer from " + proposer + " waiting for you.");
 
         Game.instance.getAllianceOffers().remove(proposer);
+        boolean atWar = Game.instance.relationBetween(me, proposer) == Relation.ENEMY;
+        String kind = atWar ? "peace" : "alliance";
         if (!reply.isAccept()) {
-            tell(proposer, me + " turned down your alliance offer.");
-            return new ActionResultResponse(true, "You turned down " + proposer + "'s alliance offer.");
+            tell(proposer, me + " turned down your " + kind + " offer.");
+            return new ActionResultResponse(true, "You turned down " + proposer + "'s " + kind + " offer.");
         }
 
+        if (atWar) {
+            // accepting between enemies ends the war: back to Neutral, and the
+            // end of a war is global news just like its declaration (P3-39)
+            Game.instance.setRelation(me, proposer, Relation.NEUTRAL);
+            notifications.add(me + " and " + proposer + " have made PEACE.");
+            return new ActionResultResponse(true, "You made peace with " + proposer + " - back to Neutral.");
+        }
         Game.instance.setRelation(me, proposer, Relation.ALLY);
         // allies share their combined vision from the next snapshot on (P3-40)
         notifications.add(me + " and " + proposer + " are now ALLIES!");

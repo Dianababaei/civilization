@@ -149,6 +149,9 @@ public class MultiplayerMenu {
     private static Process serverProcess;
 
     private static void spawnServerProcess(int port) throws IOException {
+        // one hosted server per game window: hosting again replaces the old
+        // one instead of stacking processes on ever-higher ports
+        if (serverProcess != null) serverProcess.destroy();
         String javaBin = System.getProperty("java.home") + java.io.File.separator
                 + "bin" + java.io.File.separator + "java";
         ProcessBuilder builder = new ProcessBuilder(javaBin, "-cp", serverClasspath(),

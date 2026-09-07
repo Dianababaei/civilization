@@ -2254,10 +2254,16 @@ public class GamePlayController extends ViewController {
                     JButton breakIt = new JButton("Break Alliance");
                     breakIt.addActionListener(e -> { MultiplayerSession.get().sendBreakAlliance(them); dialog.dispose(); });
                     row.add(breakIt);
+                } else if (relation == sut.civilization.Model.ModulEnums.Relation.ENEMY) {
+                    // the same offer flow means PEACE while at war (accept -> Neutral)
+                    JButton peace = new JButton("Offer Peace");
+                    peace.addActionListener(e -> { MultiplayerSession.get().sendOfferAlliance(them); dialog.dispose(); });
+                    row.add(peace);
                 }
+                boolean atWar = relation == sut.civilization.Model.ModulEnums.Relation.ENEMY;
                 // an offer FROM them waiting for MY answer
                 if (myName.equals(Game.instance.getAllianceOffers().get(them))) {
-                    JButton accept = new JButton("Accept Alliance");
+                    JButton accept = new JButton(atWar ? "Accept Peace" : "Accept Alliance");
                     accept.addActionListener(e -> { MultiplayerSession.get().sendAllianceReply(them, true); dialog.dispose(); });
                     row.add(accept);
                     JButton decline = new JButton("Decline");
@@ -2266,7 +2272,7 @@ public class GamePlayController extends ViewController {
                 }
                 // my own offer still waiting on them
                 if (them.equals(Game.instance.getAllianceOffers().get(myName))) {
-                    JLabel waiting = new JLabel("(alliance offer sent - waiting)");
+                    JLabel waiting = new JLabel(atWar ? "(peace offer sent - waiting)" : "(alliance offer sent - waiting)");
                     waiting.setForeground(new Color(0x888888));
                     row.add(waiting);
                 }

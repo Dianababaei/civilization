@@ -90,6 +90,10 @@ public class MultiplayerSession implements NetworkManager.Listener {
     }
 
     public void sendChat(String text) {
+        // pasted commands often carry invisible direction marks (U+200E/200F,
+        // zero-width space, BOM) in front of the "/" - strip them from the
+        // START only, the rest of the message may be legit Persian text
+        if (text != null) text = text.replaceAll("^[\\u200b\\u200e\\u200f\\ufeff\\s]+", "");
         // P3-48: a leading "/" is a CHEAT command - it goes to the server as a
         // cheat request (never executed locally); everything else is chat
         if (text != null && text.startsWith("/")) {
